@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   sim, shipById, containerById, craneById, rtgById, handlerById, shipProgress, shipOnboard, craneRate, yardLabel, slotLocal, berthPlace,
 } from '../sim/sim'
 import type { Ship, Container, Crane, Handler, Tug, Rtg, HistoryEvent } from '../sim/sim'
-import { BERTHS, PORTS, BLOCKS, YARD_ROWS, YARD_STACKS, berthById } from '../sim/world'
+import { BERTHS, PORTS, BLOCKS, YARD_ROWS, YARD_STACKS, berthById, PORT, HOME, isBoxShip, terminalById } from '../sim/world'
+import { PORT_LIST, PORT_ID, switchPort } from '../ports/registry'
 import { fmtDate, fmtTime, fmtClock, fmtDuration, nmBetween } from '../sim/data'
 import { GEO, lonLat } from '../sim/geo'
 import { carInfo, LOTS, STALLS } from '../sim/parking'
@@ -147,13 +148,59 @@ const TABS: { id: Tab; label: string; icon: ReactNode }[] = [
   { id: 'logistics', label: 'Logistics', icon: <IconRoute width={15} height={15} /> },
 ]
 
-export function TopBar() {
-  useUI((s) => s.tick)
-  const tab = useUI((s) => s.tab)
-  const setTab = useUI((s) => s.setTab)
+function PortSwitcher() {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className={`site port-switch ${open ? 'open' : ''}`}>
+      <button className="site-btn" onClick={() => setOpen((o) => !o)} onBlur={() => setTimeout(() => setOpen(false), 150)} aria-haspopup="listbox" aria-expanded={open}>
+        <span className="pin-dot-l" />
+        <span>
+          <b>{PORT.short}</b>
+          <small>California, US</small>
+        </span>
+        <IconChevronDown className="muted" />
+      </button>
+      {open && (
+        <div className="port-menu card" role="listbox">
+          <span className="port-menu-title">Switch port</span>
+          {PORT_LIST.map((p) => (
+            <button key={p.id} role="option" aria-selected={p.id === PORT_ID} className={p.id === PORT_ID ? 'on' : ''} onMouseDown={() => switchPort(p.id)}>
+              <span className="pin-dot-l" />
+              <span>
+                <b>{p.name}</b>
+                <small>
+                  {p.region} · {p.unlocode}
+                </small>
+              </span>
+              {p.id === PORT_ID && <span className="port-check">✓</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SearchBox() {
   const select = useUI((s) => s.select)
   const [q, setQ] = useState('')
   const [open, setOpen] = useState(false)
+  const input = useRef<HTMLInputElement>(null)
+  // "/" or ⌘K / Ctrl+K opens search, Esc closes it
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const typing = e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement
+      if ((e.key === '/' && !typing) || (e.key.toLowerCase() === 'k' && (e.metaKey || e.ctrlKey))) {
+        e.preventDefault()
+        setOpen(true)
+      } else if (e.key === 'Escape') setOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+  useEffect(() => {
+    if (open) input.current?.focus()
+  }, [open])
   const results = useMemo(() => {
     const k = q.trim().toLowerCase().replace(/\s/g, '')
     if (k.length < 2) return []
@@ -162,7 +209,7 @@ export function TopBar() {
       if (`${s.name}${s.imo}${s.navy?.hull ?? ''}`.toLowerCase().replace(/[\s-]/g, '').includes(k.replace(/-/g, '')))
         out.push({ key: s.id, label: s.name, sub: `${s.cls.label} · ${shipStatus(s).label}`, go: () => select({ type: 'ship', id: s.id }, !['working', 'anchored'].includes(s.state)) })
     for (const p of [...PLACES, ...LOGISTICS]) if (p.name.toLowerCase().replace(/\s/g, '').includes(k)) out.push({ key: p.id, label: p.name, sub: 'Place', go: () => select({ type: 'place', id: p.id }) })
-    for (const c of sim.cranes) if (c.id.toLowerCase().replace('-', '').includes(k.replace('-', ''))) out.push({ key: c.id, label: c.id, sub: 'Mobile harbour crane', go: () => select({ type: 'crane', id: c.id }) })
+    for (const c of sim.cranes) if (c.id.toLowerCase().replace('-', '').includes(k.replace('-', ''))) out.push({ key: c.id, label: c.id, sub: PORT.ct.crane === 'sts' ? 'Ship-to-shore crane' : 'Mobile harbour crane', go: () => select({ type: 'crane', id: c.id }) })
     if (out.length < 8 && k.length >= 3)
       for (const c of sim.containers.values()) {
         if (c.loc.kind === 'gone') continue
@@ -175,11 +222,59 @@ export function TopBar() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, sim.version])
   return (
+    <div className="search-wrap">
+      <button className={`search-btn ${open ? 'on' : ''}`} onClick={() => setOpen((o) => !o)} title="Search (/)" aria-expanded={open}>
+        <IconSearch />
+        <span>Search</span>
+        <kbd>/</kbd>
+      </button>
+      {open && (
+        <div
+          className="search-pop card"
+          onBlur={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOpen(false)
+          }}
+        >
+          <div className="search">
+            <IconSearch className="muted" />
+            <input ref={input} placeholder="Search vessels, containers, places…" value={q} onChange={(e) => setQ(e.target.value)} />
+          </div>
+          {results.length > 0 ? (
+            <div className="search-results">
+              {results.map((r) => (
+                <button
+                  key={r.key}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    r.go()
+                    setQ('')
+                    setOpen(false)
+                  }}
+                >
+                  <b>{r.label}</b>
+                  <span>{r.sub}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="search-hint">{q.trim().length < 2 ? 'Type a vessel name, IMO, container number, crane or place.' : 'No matches.'}</p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export function TopBar() {
+  useUI((s) => s.tick)
+  const tab = useUI((s) => s.tab)
+  const setTab = useUI((s) => s.setTab)
+  return (
     <header className="topbar">
       <div className="brand">
         <Logo />
         <span>
-          AnyMile <em>Port</em>
+          Port <em>Control</em>
         </span>
       </div>
       <nav className="views">
@@ -190,27 +285,8 @@ export function TopBar() {
           </button>
         ))}
       </nav>
-      <div className="search">
-        <IconSearch className="muted" />
-        <input placeholder="Search vessels, containers, places…" value={q} onChange={(e) => setQ(e.target.value)} onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)} />
-        {open && results.length > 0 && (
-          <div className="search-results card">
-            {results.map((r) => (
-              <button key={r.key} onMouseDown={() => (r.go(), setQ(''))}>
-                <b>{r.label}</b>
-                <span>{r.sub}</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-      <div className="site">
-        <span className="pin-dot-l" />
-        <span>
-          <b>Port of San Diego</b>
-          <small>San Diego Bay · California</small>
-        </span>
-      </div>
+      <PortSwitcher />
+      <SearchBox />
       <div className={`live ${sim.speed === 0 ? 'paused' : ''}`}>
         <span className="live-dot" /> {sim.speed === 0 ? 'Paused' : 'Live'} <b>{fmtClock(sim.time)}</b>
       </div>
@@ -221,8 +297,8 @@ export function TopBar() {
       <div className="user">
         <div className="avatar">CB</div>
         <div>
-          <b>Cahit Berkay</b>
-          <span>Operations Manager</span>
+          <b>C.Berkay</b>
+          <span>OP Manager</span>
         </div>
         <IconChevronDown className="muted" />
       </div>
@@ -300,7 +376,7 @@ function Kpis() {
       <Kpi icon={<IconContainer />} label="TEU today" value={fmt(sim.teuToday)} delta="↑ 6%" />
       <Kpi icon={<IconCrane />} label="Crane productivity" value={rate.toFixed(1)} unit="moves/h" />
       <Kpi icon={<IconShip />} label="Commercial vessels at berth" value={String(berthed)} sub={`${sim.ships.filter((s) => ['inbound', 'waiting', 'approach'].includes(s.state)).length} arriving · ${sim.ships.filter((s) => s.state === 'anchored').length} at anchor`} />
-      <Kpi icon={<IconGrid />} label="Yard utilization" value={`${Math.round(util * 100)}%`} sub="Tenth Avenue" />
+      <Kpi icon={<IconGrid />} label="Yard utilization" value={`${Math.round(util * 100)}%`} sub={PORT.ct.name} />
     </div>
   )
 }
@@ -321,12 +397,13 @@ function TodayCard() {
   const cruise = sim.ships.filter((s) => s.kind === 'cruise' && s.state === 'working')
   const pax = cruise.reduce((a, s) => a + (s.passengers?.total ?? 0), 0)
   const navy = sim.ships.filter((s) => s.cls.navy && s.state === 'working').length
+  const boxShips = sim.ships.filter((s) => isBoxShip(s.kind) && s.state === 'working').length
   return (
-    <Card title="Today in the bay" icon={<IconAnchor width={15} height={15} />}>
+    <Card title={PORT.id === 'long-beach' ? 'Today in the harbour' : 'Today in the bay'} icon={<IconAnchor width={15} height={15} />}>
       <KV
         rows={[
           ['Cruise ships alongside', `${cruise.length} · ${fmt(pax)} passengers`],
-          ['Navy ships in port', String(navy)],
+          PORT.id === 'long-beach' ? ['Container ships working', String(boxShips)] : ['Navy ships in port', String(navy)],
           ['Yachts in marinas', fmt(YACHTS.length)],
           ['Cars in waterfront lots', fmt(STALLS.filter((s) => s.occupied).length)],
         ]}
@@ -344,7 +421,7 @@ function VesselList() {
   return (
     <Card title="Vessels" icon={<IconShip width={15} height={15} />} right={<span className="muted small">{list.length}</span>} className="tall">
       <div className="seg">
-        {(['all', 'cargo', 'cruise', 'navy', 'moving'] as const).map((f) => (
+        {(['all', 'cargo', 'cruise', 'navy', 'moving'] as const).filter((f) => f !== 'navy' || sim.ships.some((s) => s.cls.navy)).map((f) => (
           <button key={f} className={filter === f ? 'on' : ''} onClick={(e) => (e.stopPropagation(), setFilter(f))}>
             {f[0].toUpperCase() + f.slice(1)}
           </button>
@@ -391,8 +468,8 @@ function YardPanel() {
   })
   return (
     <>
-      <Card title="Yard · Tenth Avenue" icon={<IconContainer width={15} height={15} />}>
-        <div className="tiles">
+      <Card title={`Yard · ${PORT.ct.code === 'TAMT' ? 'Tenth Avenue' : PORT.ct.name}`} icon={<IconContainer width={15} height={15} />}>
+        <div className={`tiles ${perBlock.length === 3 ? 'three' : ''}`}>
           {perBlock.map(({ b, used, reef, cap }) => (
             <div className="tile" key={b.id}>
               <span>Block {b.id}</span>
@@ -508,18 +585,18 @@ function LogisticsPanel() {
         <div className="tiles three">
           <div className="tile">
             <span>Truck</span>
-            <b>78%</b>
+            <b>{PORT.id === 'long-beach' ? '67%' : '78%'}</b>
           </div>
           <div className="tile">
             <span>Rail</span>
-            <b>17%</b>
+            <b>{PORT.id === 'long-beach' ? '28%' : '17%'}</b>
           </div>
           <div className="tile">
             <span>Barge/CFS</span>
             <b>5%</b>
           </div>
         </div>
-        <p className="hint">Modal split and queue figures are simulated.</p>
+        <p className="hint">{PORT.id === 'long-beach' ? 'Rail share as reported for 2024 (about 28% of boxes); queues are simulated.' : 'Modal split and queue figures are simulated.'}</p>
       </Card>
     </>
   )
@@ -579,7 +656,7 @@ function ShipPanel({ s }: { s: Ship }) {
   const st = shipStatus(s)
   const b = berthById(s.berthId)
   const prog = shipProgress(s)
-  const isBox = s.kind === 'container' || s.kind === 'feeder'
+  const isBox = isBoxShip(s.kind)
   const capacity = s.slots.length
   const onboard = shipOnboard(s)
   const kn = (s.speed / 11) * s.cls.speedKn * 0.7
@@ -589,7 +666,7 @@ function ShipPanel({ s }: { s: Ship }) {
       <PanelHead
         kicker={`${s.cls.navy ? 'U.S. Navy' : 'Vessel'} · ${s.cls.label}`}
         title={s.cls.navy ? s.name : `MV ${s.name}`}
-        sub={s.navy ? `${s.navy.hull} · homeport San Diego` : `IMO ${s.imo} · ${s.line.name} · ${s.flag}`}
+        sub={s.navy ? `${s.navy.hull} · ${PORT.text.navyHome ?? 'U.S. Navy'}` : `IMO ${s.imo} · ${s.line.name} · ${s.flag}`}
         icon={s.kind === 'carcarrier' ? <IconCar /> : s.kind === 'cruise' ? <IconUsers /> : <IconShip />}
         actions={
           <>
@@ -622,8 +699,8 @@ function ShipPanel({ s }: { s: Ship }) {
             <IconChevron className="muted" />
             <div className="hub">
               <span>Now</span>
-              <b>San Diego</b>
-              <small>{b.terminal === 'CRUISE' ? 'Cruise piers' : b.terminal}</small>
+              <b>{PORT.short}</b>
+              <small>{terminalById(b.terminal)?.short ?? b.terminal}</small>
             </div>
             <IconChevron className="muted" />
             <div>
@@ -722,9 +799,9 @@ function ShipPanel({ s }: { s: Ship }) {
           </div>
           <KV
             rows={[
-              ['Inbound', `${portName(s.voyage.prev)} → San Diego · ${fmt(nmBetween(PORTS[s.voyage.prev], PORTS.USSAN))} nm`],
-              ['Outbound', `San Diego → ${portName(s.voyage.next)} · ${fmt(nmBetween(PORTS.USSAN, PORTS[s.voyage.next]))} nm`],
-              ['Bay transit', `Point Loma → Ballast Point → main channel → ${b.label}`],
+              ['Inbound', `${portName(s.voyage.prev)} → ${PORT.short} · ${fmt(nmBetween(PORTS[s.voyage.prev], HOME))} nm`],
+              ['Outbound', `${PORT.short} → ${portName(s.voyage.next)} · ${fmt(nmBetween(HOME, PORTS[s.voyage.next]))} nm`],
+              ['Harbour transit', PORT.id === 'long-beach' ? `Queen’s Gate → Long Beach Channel → ${b.label}` : `Point Loma → Ballast Point → main channel → ${b.label}`],
               ['Traffic separation', 'Inbound and outbound lanes, one vessel manoeuvring per basin'],
             ]}
           />
@@ -778,7 +855,7 @@ function OtherCargo({ s }: { s: Ship }) {
             <Bar value={1 - v.toDischarge / v.planned} tone="orange" />
           </div>
         </div>
-        <KV rows={[['Main brand', v.brand], ['Remain on board', `${fmt(v.total - v.planned)} units → ${PORTS[s.voyage.next].name}`], ['Ramp', 'Stern quarter ramp'], ['Processing', 'NCMT lots & processing deck']]} />
+        <KV rows={[['Main brand', v.brand], ['Remain on board', `${fmt(v.total - v.planned)} units → ${PORTS[s.voyage.next].name}`], ['Ramp', 'Stern quarter ramp'], ['Processing', `${PORT.roro.code} lots & processing`]]} />
       </>
     )
   }
@@ -865,11 +942,11 @@ function containerWhere(c: Container): string {
     const l = slotLocal(s.cls, loc.slot)
     return `MV ${s.name} · Bay ${String(l.bay * 2 + 1).padStart(2, '0')} · Row ${String(l.row).padStart(2, '0')} · Tier ${82 + l.tier * 2}`
   }
-  if (loc.kind === 'yard') return `TAMT ${yardLabel(loc.slot)}`
+  if (loc.kind === 'yard') return `${PORT.ct.code} ${yardLabel(loc.slot)}`
   if (loc.kind === 'crane') return `On ${loc.id} spreader`
   if (loc.kind === 'handler') return `On forklift ${loc.id}`
   if (loc.kind === 'rtg') return `On ${loc.id} (yard re-handle)`
-  if (loc.kind === 'transfer') return `TAMT apron · under ${loc.craneId}`
+  if (loc.kind === 'transfer') return `${PORT.ct.code} apron · under ${loc.craneId}`
   return loc.where
 }
 
@@ -877,13 +954,13 @@ function plannedSteps(c: Container): HistoryEvent[] {
   const t = sim.time
   if (c.flow === 'import' && c.loc.kind !== 'gone') {
     const steps: HistoryEvent[] = []
-    if (c.loc.kind !== 'yard') steps.push({ t: t + 30, event: 'Stack in yard', place: 'TAMT yard', planned: true })
-    if (!c.history.some((h) => h.event.startsWith('Customs'))) steps.push({ t: t + 180, event: 'Customs release (CBP)', place: 'TAMT', planned: true })
-    steps.push({ t: t + 420, event: 'Gate out · truck/rail', place: `TAMT → ${c.dest}`, planned: true })
+    if (c.loc.kind !== 'yard') steps.push({ t: t + 30, event: 'Stack in yard', place: `${PORT.ct.code} yard`, planned: true })
+    if (!c.history.some((h) => h.event.startsWith('Customs'))) steps.push({ t: t + 180, event: 'Customs release (CBP)', place: PORT.ct.code, planned: true })
+    steps.push({ t: t + 420, event: 'Gate out · truck/rail', place: `${PORT.ct.code} → ${c.dest}`, planned: true })
     steps.push({ t: t + 1500, event: 'Delivered', place: `${c.consignee} · ${c.dest}`, planned: true })
     return steps
   }
-  if ((c.flow === 'export' || c.flow === 'empty') && c.vesselId && c.loc.kind !== 'ship') return [{ t: t + 40, event: `Load on ${c.vesselName}`, place: 'TAMT quay', planned: true }]
+  if ((c.flow === 'export' || c.flow === 'empty') && c.vesselId && c.loc.kind !== 'ship') return [{ t: t + 40, event: `Load on ${c.vesselName}`, place: `${PORT.ct.code} quay`, planned: true }]
   return []
 }
 
@@ -913,8 +990,8 @@ function ContainerPanel({ c }: { c: Container }) {
             <IconChevron className="muted" />
             <div className="hub">
               <span>Via</span>
-              <b>San Diego</b>
-              <small>TAMT</small>
+              <b>{PORT.short}</b>
+              <small>{PORT.ct.code}</small>
             </div>
             <IconChevron className="muted" />
             <div>
@@ -1007,7 +1084,13 @@ function CranePanel({ c }: { c: Crane }) {
   const cont = containerById(c.carrying ?? undefined)
   return (
     <>
-      <PanelHead kicker="Mobile harbour crane · TAMT" title={c.id} sub="All-electric MHC · 200 t" icon={<IconCrane />} actions={<CloseBtn />} />
+      <PanelHead
+        kicker={PORT.ct.crane === 'sts' ? `Ship-to-shore crane · ${PORT.ct.code}` : `Mobile harbour crane · ${PORT.ct.code}`}
+        title={c.id}
+        sub={PORT.ct.crane === 'sts' ? 'Electric super-post-Panamax STS · 24 boxes wide · 65 t' : 'All-electric MHC · 200 t'}
+        icon={<IconCrane />}
+        actions={<CloseBtn />}
+      />
       <div className="row gap wrap">
         <Chip tone={c.job ? 'green' : c.phase === 'travel' ? 'blue' : 'grey'}>{c.job ? (c.job.type === 'discharge' ? 'Discharging' : 'Loading') : c.phase === 'travel' ? 'Travelling' : 'Idle'}</Chip>
         <span className="muted small ellipsis">{c.status}</span>
@@ -1044,7 +1127,13 @@ function RtgPanel({ g }: { g: Rtg }) {
   const cont = containerById(g.carrying ?? undefined)
   return (
     <>
-      <PanelHead kicker="Yard gantry crane · TAMT" title={g.id} sub={`Block ${BLOCKS[g.block].id} · rows 2–3 · 40 t`} icon={<IconCrane />} actions={<CloseBtn />} />
+      <PanelHead
+        kicker={PORT.ct.crane === 'sts' ? `Automated stacking crane · ${PORT.ct.code}` : `Yard gantry crane · ${PORT.ct.code}`}
+        title={g.id}
+        sub={`Block ${BLOCKS[g.block].id} · rows 2–3 · 40 t`}
+        icon={<IconCrane />}
+        actions={<CloseBtn />}
+      />
       <div className="row gap wrap">
         <Chip tone={g.job ? 'green' : 'grey'}>{g.job ? 'Re-handling' : 'Standing by'}</Chip>
         <span className="muted small ellipsis">{g.status}</span>
@@ -1071,7 +1160,18 @@ function HandlerPanel({ h }: { h: Handler }) {
   const cont = containerById(h.carrying ?? undefined)
   return (
     <>
-      <PanelHead kicker="Container forklift · TAMT" title={h.id} sub={`Laden top-loader · 45 t · ${h.operator}`} icon={<IconForklift />} actions={<><FollowBtn /><CloseBtn /></>} />
+      <PanelHead
+        kicker={PORT.ct.crane === 'sts' ? `Electric top handler · ${PORT.ct.code}` : `Container forklift · ${PORT.ct.code}`}
+        title={h.id}
+        sub={`${PORT.ct.crane === 'sts' ? 'Battery-electric laden handler' : 'Laden top-loader'} · 45 t · ${h.operator}`}
+        icon={<IconForklift />}
+        actions={
+          <>
+            <FollowBtn />
+            <CloseBtn />
+          </>
+        }
+      />
       <div className="row gap wrap">
         <Chip tone={h.phase === 'working' ? 'green' : 'grey'}>{h.phase === 'working' ? 'Working' : 'Parked'}</Chip>
         <span className="muted small ellipsis">{h.status}</span>
@@ -1099,7 +1199,7 @@ function TugPanel({ t }: { t: Tug }) {
       <PanelHead kicker="Harbour tug" title={t.name} sub="ASD tug · 70 t bollard pull" icon={<IconAnchor />} actions={<><FollowBtn /><CloseBtn /></>} />
       <div className="row gap">
         <Chip tone={ship ? 'blue' : 'grey'}>{ship ? 'Assisting' : 'Standing by'}</Chip>
-        <span className="muted small">{ship ? ship.name : 'Tug berth · Barrio Logan'}</span>
+        <span className="muted small">{ship ? ship.name : PORT.id === 'long-beach' ? 'Tug berth · Long Beach Harbor' : 'Tug berth · Barrio Logan'}</span>
       </div>
       <KV rows={[['Speed', `${(t.speed * 3.9).toFixed(1)} kn`], ['Position', t.shipId ? (t.offset > 0 ? 'Bow' : 'Stern') : 'Moored']]} />
     </>
@@ -1260,7 +1360,7 @@ function PlacePanel({ id }: { id: string }) {
   return (
     <>
       <PanelHead
-        kicker={p.id.startsWith('marina-') ? 'Yacht marina' : { museum: 'Museum', landmark: 'Landmark', park: 'Park', terminal: 'Marine terminal', navy: 'U.S. Navy', industry: 'Shipyard', leisure: 'Waterfront', transport: 'Transport', logistics: 'Logistics site' }[p.kind]}
+        kicker={p.id.startsWith('marina-') ? 'Yacht marina' : { museum: 'Museum', landmark: 'Landmark', park: 'Park', terminal: 'Marine terminal', navy: 'U.S. Navy', industry: PORT.id === 'long-beach' ? 'Industry' : 'Shipyard', leisure: 'Waterfront', transport: 'Transport', logistics: 'Logistics site' }[p.kind]}
         title={p.name}
         sub={`${ll.lat.toFixed(4)}°N, ${Math.abs(ll.lon).toFixed(4)}°W`}
         icon={statue ? <IconStatue /> : p.kind === 'logistics' ? <IconDock /> : <IconPinMap />}
@@ -1342,7 +1442,7 @@ export function BottomDock() {
   )
 }
 
-const PLAN_BERTHS = ['B1', 'B2', 'B3', 'B4', 'N1', 'N2', 'C1', 'C2', 'C3']
+const PLAN_BERTHS = Object.keys(PORT.schedule)
 function BerthPlan() {
   const select = useUI((s) => s.select)
   const berths = BERTHS.filter((b) => PLAN_BERTHS.includes(b.id))
@@ -1367,7 +1467,7 @@ function BerthPlan() {
         <div className="g-row" key={b.id}>
           <span className="g-label">
             <b>{b.id}</b>
-            <small>{b.terminal === 'CRUISE' ? 'Cruise' : b.terminal}</small>
+            <small>{terminalById(b.terminal)?.code ?? b.terminal}</small>
           </span>
           <div className="g-track">
             {sim.calls

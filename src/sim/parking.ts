@@ -1,5 +1,6 @@
 // Parked cars generated inside OpenStreetMap surface car parks around the waterfront.
 import { GEO, pointInRing } from './geo'
+import { PORT } from './world'
 import type { GeoParking } from './geo'
 
 export interface Stall {
@@ -22,8 +23,10 @@ export interface LotInfo {
   cz: number
 }
 
-// waterfront window: downtown, Barrio Logan, the terminals, the naval base and the Coronado side near the bridge
-const inWindow = (x: number, z: number) => x > -1800 && x < 3100 && z > -1500 && z < 3300
+// waterfront window: San Diego – downtown, Barrio Logan, the terminals, the naval base and Coronado near the bridge;
+// Long Beach – downtown, the Pike and Shoreline, the port and San Pedro / Wilmington
+const WINDOW = PORT.id === 'long-beach' ? [-3600, 4300, -2000, 2600] : [-1800, 3100, -1500, 3300]
+const inWindow = (x: number, z: number) => x > WINDOW[0] && x < WINDOW[1] && z > WINDOW[2] && z < WINDOW[3]
 
 function hash(n: number) {
   let h = n | 0

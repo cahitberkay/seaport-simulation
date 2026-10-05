@@ -1,6 +1,6 @@
 import type { Ship } from '../sim/sim'
 import { shipProgress } from '../sim/sim'
-import { PORTS } from '../sim/world'
+import { PORTS, isBoxShip } from '../sim/world'
 
 export type Tone = 'green' | 'amber' | 'blue' | 'grey' | 'red' | 'orange'
 
@@ -19,10 +19,11 @@ export function shipStatus(s: Ship): { label: string; tone: Tone; pct?: number }
       return { label: 'Berthing', tone: 'blue' }
     case 'working': {
       if (s.navy) return { label: 'In port', tone: 'grey' }
-      if (s.kind === 'container' || s.kind === 'feeder')
+      if (isBoxShip(s.kind))
         return s.toDischarge.size ? { label: 'Discharging', tone: 'orange', pct } : { label: 'Loading', tone: 'green', pct }
       if (s.kind === 'carcarrier') return { label: 'Discharging vehicles', tone: 'orange', pct }
       if (s.kind === 'bulk') return { label: 'Discharging bulk', tone: 'orange', pct }
+      if (s.kind === 'tanker') return { label: 'Discharging crude', tone: 'orange', pct }
       if (s.kind === 'multipurpose') return { label: 'Discharging blades', tone: 'orange', pct }
       return { label: 'Turnaround', tone: 'green', pct }
     }

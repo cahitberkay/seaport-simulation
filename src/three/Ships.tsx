@@ -199,7 +199,7 @@ function ContainerShip({ ship }: { ship: Ship }) {
       <mesh material={MAT.white} position={[0, f + 1.2, L / 2 - 12.5]} castShadow>
         <boxGeometry args={[ship.cls.beam * 0.86, 2.4, 0.6]} />
       </mesh>
-      <Accommodation ship={ship} z={-L / 2 + 7} h={ship.kind === 'feeder' ? 8 : 11} />
+      <Accommodation ship={ship} z={-L / 2 + 7} h={ship.kind === 'feeder' ? 8 : ship.kind === 'ulcv' || ship.kind === 'neopanamax' ? 14 : 11} />
       <NamePlates ship={ship} color="#1f2d55" y={f - 1} />
     </group>
   )
@@ -510,7 +510,7 @@ function ShipLabel({ ship }: { ship: Ship }) {
   // ships quietly in port (navy alongside, anchored) only get a label when selected
   const quiet = (ship.navy && ship.state === 'working') || ship.static
   if (!showLabels || (quiet && !(sel?.type === 'ship' && sel.id === ship.id))) return null
-  const tall = ship.kind === 'cruise' ? 30 : ship.kind === 'carcarrier' || ship.kind === 'carrier' || ship.kind === 'amphib' ? 30 : 22
+  const tall = ship.kind === 'cruise' ? 30 : ship.kind === 'carcarrier' || ship.kind === 'carrier' || ship.kind === 'amphib' || ship.kind === 'ulcv' || ship.kind === 'neopanamax' ? 30 : 22
   return (
     <Html position={[0, tall, 0]} center zIndexRange={[8, 0]} style={{ pointerEvents: 'none' }}>
       <div className="tag">
@@ -538,11 +538,11 @@ export function ShipModel({ ship }: { ship: Ship }) {
     g.rotation.z = Math.sin(clock.elapsedTime * 0.5 + bob) * 0.006
   })
   const body =
-    ship.kind === 'container' || ship.kind === 'feeder' ? (
+    ship.kind === 'container' || ship.kind === 'feeder' || ship.kind === 'neopanamax' || ship.kind === 'ulcv' ? (
       <ContainerShip ship={ship} />
     ) : ship.kind === 'carcarrier' ? (
       <CarCarrier ship={ship} />
-    ) : ship.kind === 'bulk' ? (
+    ) : ship.kind === 'bulk' || ship.kind === 'tanker' ? (
       <BulkCarrier ship={ship} />
     ) : ship.kind === 'multipurpose' ? (
       <MultipurposeShip ship={ship} />

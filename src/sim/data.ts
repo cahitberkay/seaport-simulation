@@ -1,5 +1,5 @@
 // Reference data and generators: operators, names, cargo catalogue, IDs with real check digits.
-import { PORTS } from './world'
+import { PORTS, PORT } from './world'
 import type { ShipKind, Port } from './world'
 
 let seed = 20261005
@@ -58,6 +58,9 @@ export const LINES: Line[] = [
 const NAME_PARTS: Record<ShipKind, [string[], string[]]> = {
   container: [['Pacific', 'Coral', 'Quetzal', 'Sierra', 'Azul', 'Baja', 'Cascadia', 'Solana', 'Tierra', 'Monterey'], ['Verde', 'Trader', 'Star', 'Horizon', 'Express', 'Bay', 'Bridge', 'Navigator', 'Pride', 'Venture']],
   feeder: [['Ensenada', 'Rio', 'Costa', 'Punta', 'Mar', 'Isla', 'Cabo'], ['Spirit', 'Lempa', 'Fresca', 'Brava', 'Azul', 'Norte', 'Clara']],
+  neopanamax: [['Pacific', 'Jade', 'Orient', 'Golden Gate', 'Celestial', 'Kowloon', 'Formosa', 'Hanjin', 'Yangtze', 'Pearl River'], ['Courage', 'Harmony', 'Fortune', 'Excellence', 'Prosperity', 'Unity', 'Endeavour', 'Spirit', 'Triumph', 'Dragon']],
+  ulcv: [['Ever', 'Grand', 'Mega', 'Ocean', 'Titan', 'Majestic', 'Imperial', 'Global'], ['Atlas', 'Ambition', 'Globe', 'Legend', 'Monarch', 'Summit', 'Pinnacle', 'Horizon']],
+  tanker: [['Alaska', 'Polar', 'North Slope', 'Sierra'], ['Discovery', 'Endeavor', 'Resolve', 'Frontier']],
   carcarrier: [['Auto', 'Grand', 'Harbor', 'Sunrise', 'Cielo', 'Pacific', 'Seabright'], ['Meridian', 'Pasifico', 'Pioneer', 'Carrier', 'Drive', 'Motorway', 'Voyager']],
   bulk: [['Mesa', 'Iron', 'Golden', 'Torrey', 'Copper'], ['Verde', 'Pelican', 'Sierra', 'Pine', 'Canyon']],
   multipurpose: [['Tradewind', 'Nordic', 'Santa Ana', 'Pacific'], ['Lift', 'Breeze', 'Wind', 'Heavy']],
@@ -132,7 +135,7 @@ export interface Voyage {
   service: string
 }
 
-const SERVICES: Record<ShipKind, { service: string; prev: string[]; next: string[] }[]> = {
+const SERVICES: Partial<Record<ShipKind, { service: string; prev: string[]; next: string[] }[]>> & Record<'container', { service: string; prev: string[]; next: string[] }[]> = {
   container: [
     { service: 'Central America Reefer Express', prev: ['GTPRQ', 'CRCAL', 'ECGYE', 'PABLB'], next: ['USLGB', 'USOAK'] },
     { service: 'Transpacific South Loop', prev: ['CNSHA', 'KRPUS', 'TWKHH', 'JPYOK'], next: ['USOAK', 'USSEA', 'CAVAN'] },
@@ -154,8 +157,12 @@ const SERVICES: Record<ShipKind, { service: string; prev: string[]; next: string
   carrier: [{ service: 'Carrier strike group', prev: ['USHNL'], next: ['USHNL'] }],
 }
 
+SERVICES.neopanamax = SERVICES.container
+SERVICES.ulcv = SERVICES.container
+SERVICES.tanker = [{ service: 'Alaska crude shuttle', prev: ['USVDZ'], next: ['USVDZ'] }]
+
 export function voyageFor(kind: ShipKind): Voyage {
-  const s = pick(SERVICES[kind])
+  const s = pick(PORT.services[kind] ?? SERVICES[kind] ?? SERVICES.container)
   let next = pick(s.next)
   const prev = pick(s.prev)
   if (next === prev) next = s.next.find((n) => n !== prev) ?? next
@@ -207,11 +214,13 @@ export const regionOf = (code: string) => {
   const c = PORTS[code]?.country
   if (c === 'MX') return 'mexico'
   if (['GT', 'CR', 'EC', 'PE', 'PA'].includes(c ?? '')) return 'latam'
-  if (['CN', 'KR', 'JP', 'TW'].includes(c ?? '')) return 'asia'
+  if (['CN', 'KR', 'JP', 'TW', 'HK', 'VN', 'SG'].includes(c ?? '')) return 'asia'
   return 'export'
 }
 
-export const INLAND = ['San Diego, CA', 'Los Angeles, CA (truck)', 'Phoenix, AZ (rail)', 'Las Vegas, NV (truck)', 'Denver, CO (rail)', 'Tijuana, MX (truck)', 'Salt Lake City, UT (rail)']
+export const INLAND = PORT.inland
+/** where export boxes waiting in the main terminal's yard are bound */
+export const EXPORT_DESTS = () => (PORT.id === 'long-beach' ? ['CNSHA', 'CNYTN', 'KRPUS', 'JPYOK', 'TWKHH'] : ['GTPRQ', 'CRCAL', 'USOAK', 'KRPUS'])
 export const SHIPPERS: Record<string, string[]> = {
   latam: ['Finca Las Brisas · Escuintla', 'Cooperativa Tarrazú', 'Agroexport del Pacífico', 'Bananera Costa Sur'],
   mexico: ['Agrícola Michoacán', 'Huertas de Jalisco', 'Bebidas del Norte', 'Autopartes Bajío'],

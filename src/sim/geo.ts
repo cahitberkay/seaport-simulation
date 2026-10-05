@@ -1,6 +1,4 @@
 // OpenStreetMap-derived geography (see scripts/process.py). Data © OpenStreetMap contributors, ODbL.
-import raw from '../data/geo.json'
-
 export type XZ = [number, number]
 
 export interface GeoBuilding {
@@ -51,6 +49,13 @@ export interface GeoPoi {
   artist?: string
 }
 
+export interface GeoBridge {
+  n: string
+  c: XZ[]
+  peak: number
+  color: string
+}
+
 interface GeoData {
   origin: { lat: number; lon: number; unitM: number }
   land: XZ[][][]
@@ -61,11 +66,30 @@ interface GeoData {
   breakwaters: GeoPier[]
   runways: GeoRunway[]
   pois: GeoPoi[]
-  bridge: XZ[]
+  bridges: GeoBridge[]
+  yards?: { n: string; p: XZ[] }[]
   attribution: string
 }
 
-export const GEO = raw as unknown as GeoData
+// set once at start-up (see main.tsx) before any module that reads it is evaluated
+export let GEO = undefined as unknown as GeoData
+let landBoxes: { x0: number; x1: number; z0: number; z1: number }[] = []
+export function setGeo(raw: unknown) {
+  GEO = raw as GeoData
+  landBoxes = GEO.land.map((poly) => {
+    let x0 = Infinity
+    let x1 = -Infinity
+    let z0 = Infinity
+    let z1 = -Infinity
+    for (const [x, z] of poly[0]) {
+      x0 = Math.min(x0, x)
+      x1 = Math.max(x1, x)
+      z0 = Math.min(z0, z)
+      z1 = Math.max(z1, z)
+    }
+    return { x0, x1, z0, z1 }
+  })
+}
 
 export function pointInRing(x: number, z: number, ring: XZ[]) {
   let inside = false
@@ -76,20 +100,6 @@ export function pointInRing(x: number, z: number, ring: XZ[]) {
   }
   return inside
 }
-
-const landBoxes = GEO.land.map((poly) => {
-  let x0 = Infinity
-  let x1 = -Infinity
-  let z0 = Infinity
-  let z1 = -Infinity
-  for (const [x, z] of poly[0]) {
-    x0 = Math.min(x0, x)
-    x1 = Math.max(x1, x)
-    z0 = Math.min(z0, z)
-    z1 = Math.max(z1, z)
-  }
-  return { x0, x1, z0, z1 }
-})
 
 export function isLand(x: number, z: number) {
   for (let i = 0; i < GEO.land.length; i++) {

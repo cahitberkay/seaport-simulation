@@ -1,4 +1,4 @@
-import { PORTS } from '../sim/world'
+import { PORTS, HOME, PORT } from '../sim/world'
 import type { Port } from '../sim/world'
 
 // Schematic Pacific map (equirectangular, Pacific-centred). Coastlines are deliberately simplified.
@@ -47,7 +47,7 @@ function arc(a: Port, b: Port) {
 /** progress 0..1 along the inbound leg, or 1..2 along the outbound leg */
 export function RouteMap({ prev, next, progress }: { prev: string; next: string; progress: number }) {
   const a = PORTS[prev]
-  const sd = PORTS.USSAN
+  const sd = HOME
   const b = PORTS[next]
   const inLeg = arc(a, sd)
   const outLeg = arc(sd, b)
@@ -56,7 +56,7 @@ export function RouteMap({ prev, next, progress }: { prev: string; next: string;
   const px = (1 - t) ** 2 * leg.x1 + 2 * (1 - t) * t * leg.mx + t * t * leg.x2
   const py = (1 - t) ** 2 * leg.y1 + 2 * (1 - t) * t * leg.my + t * t * leg.y2
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="routemap" role="img" aria-label={`Route ${a.name} to San Diego to ${b.name}`}>
+    <svg viewBox={`0 0 ${W} ${H}`} className="routemap" role="img" aria-label={`Route ${a.name} to ${PORT.short} to ${b.name}`}>
       <rect width={W} height={H} rx="10" className="rm-sea" />
       {[0, 30].map((lat) => (
         <line key={lat} x1="0" x2={W} y1={Y(lat)} y2={Y(lat)} className="rm-grid" />
@@ -79,7 +79,7 @@ export function RouteMap({ prev, next, progress }: { prev: string; next: string;
       ))}
       <circle cx={X(sd.lon)} cy={Y(sd.lat)} r="4.5" className="rm-hub" />
       <text x={X(sd.lon) - 5} y={Y(sd.lat) - 7} textAnchor="end" className="rm-label rm-strong">
-        San Diego
+        {PORT.short}
       </text>
       <circle cx={px} cy={py} r="5" className="rm-ship" />
     </svg>

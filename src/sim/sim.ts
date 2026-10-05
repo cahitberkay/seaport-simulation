@@ -2,14 +2,15 @@ import { buildPath, follow, lerpAngle } from './path'
 import type { Mover, PathPoint, Waypoint } from './path'
 import {
   BERTHS, SHIP_CLASSES, PORTS, LAND_Y, CRANE_Z, TRANSFER_Z, APRON_LANE_Z, YARD_ROWS, YARD_STACKS, BLOCKS, CORRIDORS,
-  HOME_CORRIDOR, HOME_X, CONTAINER, FRONT_OFFSET, YARD_LINES, TAMT_FRAME, NCMT_FRAME, SEA_SPAWN, ZONES, anchorage, anchorageIn, anchorageOut,
-  rowZ, aisleZ, stackX, tierY, berthById, inboundLane, outboundLane, outboundEntry, toLocalF, toWorldF,
+  HOME_CORRIDOR, HOME_X, CONTAINER, FRONT_OFFSET, YARD_LINES, CT_FRAME, RORO_FRAME, SEA_SPAWN, EXIT, ZONES, anchorage, anchorageIn, anchorageOut,
+  rowZ, aisleZ, stackX, tierY, berthById, inboundLane, outboundLane, outboundEntry, toLocalF, toWorldF, PORT, HOME, isBoxShip, terminalById,
 } from './world'
+import { isLand } from './geo'
 import type { Berth, ShipKind, ShipClass, TerminalId } from './world'
 import {
   rnd, pick, range, irange, LINES, FLAGS, shipName, releaseName, claimName, imoNumber, mmsi, callSign, containerNumber,
   voyageFor, nmBetween, legPoint, fmtLatLon, CARGO_BY_REGION, regionOf, INLAND, SHIPPERS, CONSIGNEES, VEHICLE_BRANDS,
-  BULK_CARGO, HULL_PREFIX,
+  BULK_CARGO, HULL_PREFIX, EXPORT_DESTS,
 } from './data'
 import type { Line, Voyage } from './data'
 
@@ -101,6 +102,7 @@ export interface Ship extends Mover {
   navy?: { hull: string; crew: number; status: string; commissioned: number }
   history: HistoryEvent[]
   callId: string
+  autoAcc?: number
 }
 
 export interface Call {
@@ -236,8 +238,11 @@ function alert(text: string, tone: Alert['tone'], ref?: Alert['ref']) {
 
 // ═════════════════════════════════════ geometry
 
-export const tamtLocal = (x: number, z: number) => toLocalF(TAMT_FRAME, x, z)
-export const tamtWorld = (x: number, z: number) => toWorldF(TAMT_FRAME, x, z)
+export const ctLocal = (x: number, z: number) => toLocalF(CT_FRAME, x, z)
+export const ctWorld = (x: number, z: number) => toWorldF(CT_FRAME, x, z)
+const CT = PORT.ct.code
+/** berths share a manoeuvring lock (and basin zone) per terminal, or per basin when several terminals share one */
+export const lockOf = (b: Berth) => b.lock ?? b.terminal
 
 export const slotCount = (cls: ShipClass) => (cls.bays ?? 0) * (cls.rows ?? 0) * (cls.tiers ?? 0)
 
@@ -261,10 +266,10 @@ export function slotWorld(ship: Ship, slot: number) {
   const w = toWorld(ship, l.x, l.z)
   return { x: w.x, y: l.y, z: w.z }
 }
-/** ship slot in TAMT-local coordinates (cranes work in the terminal frame) */
+/** ship slot in terminal-local coordinates (cranes work in the terminal frame) */
 const slotTamt = (ship: Ship, slot: number) => {
   const w = slotWorld(ship, slot)
-  const l = tamtLocal(w.x, w.z)
+  const l = ctLocal(w.x, w.z)
   return { x: l.x, y: w.y, z: l.z }
 }
 
@@ -280,7 +285,7 @@ export function yardDecode(slot: number) {
   const block = Math.floor(slot / (3 * YARD_LINES * YARD_STACKS * YARD_ROWS))
   return { block, row, stack, line, tier }
 }
-/** TAMT-local position of a yard slot */
+/** terminal-local position of a yard slot */
 export function yardLocal(slot: number) {
   const d = yardDecode(slot)
   return { x: stackX(d.block, d.stack), y: tierY(d.tier), z: rowZ(d.row) + FRONT_OFFSET - d.line * 1.36 }
@@ -350,15 +355,19 @@ function originHistory(c: Container, vesselName: string, departT: number, voyage
 
 let shipSeq = 1
 let callSeq = 1
-export const berthPlace = (b: Berth) =>
-  ({ TAMT: 'Tenth Avenue Marine Terminal', NCMT: 'National City Marine Terminal', CRUISE: b.label, NAVY: `Naval Base San Diego · ${b.label}`, NASNI: 'NAS North Island' })[b.terminal]
+export const berthPlace = (b: Berth) => {
+  const t = terminalById(b.terminal)
+  if (!t) return b.label
+  if (t.labelOnly) return b.label
+  return t.navy && b.terminal !== 'NASNI' ? `${t.name} · ${b.label}` : t.name
+}
 
 function buildVoyageHistory(ship: Ship, arriveT: number) {
   const a = PORTS[ship.voyage.prev]
-  const nm = Math.max(40, nmBetween(a, PORTS.USSAN))
+  const nm = Math.max(40, nmBetween(a, HOME))
   const hours = nm / (ship.cls.speedKn * 0.85)
   const depart = arriveT - hours * 60
-  if (ship.cls.navy) ship.history.push({ t: depart - 600, event: 'Underway · fleet exercise', place: 'SOCAL operating area' })
+  if (ship.cls.navy) ship.history.push({ t: depart - 600, event: 'Underway · fleet exercise', place: PORT.text.exercise ?? 'Operating area' })
   else {
     ship.history.push({ t: depart - range(600, 1100), event: 'Cargo operations completed', place: `${a.name}, ${a.country}` })
     ship.history.push({ t: depart, event: `Departed ${a.name}`, place: `${a.name}, ${a.country}` })
@@ -366,10 +375,10 @@ function buildVoyageHistory(ship: Ship, arriveT: number) {
   const n = Math.max(1, Math.min(5, Math.round(hours / 40)))
   for (let i = 1; i <= n; i++) {
     const f = i / (n + 1)
-    const p = legPoint(a, PORTS.USSAN, f)
+    const p = legPoint(a, HOME, f)
     ship.history.push({ t: depart + (arriveT - depart) * f, event: `AIS position · ${(ship.cls.speedKn * range(0.7, 0.95)).toFixed(1)} kn`, place: fmtLatLon(p.lat, p.lon) })
   }
-  ship.history.push({ t: arriveT - range(110, 170), event: 'Pilot boarded', place: 'San Diego pilot station · off Point Loma' })
+  ship.history.push({ t: arriveT - range(110, 170), event: 'Pilot boarded', place: PORT.text.pilot })
   return depart
 }
 
@@ -377,7 +386,11 @@ function workMinutes(ship: Ship) {
   switch (ship.kind) {
     case 'container':
     case 'feeder':
-      return ((ship.plannedDischarge + ship.plannedLoad) * 3.2) / 2 + 30
+    case 'neopanamax':
+    case 'ulcv':
+      // simulated quay cranes: two per ship; other terminals work a full gang of ship-to-shore cranes
+      return berthById(ship.berthId).cranes ? ((ship.plannedDischarge + ship.plannedLoad) * 3.2) / 2 + 30 : (ship.plannedDischarge + ship.plannedLoad) / AUTO_RATE + 40
+    case 'tanker':
     case 'carcarrier':
       return ship.vehicles!.toDischarge / 9 + 40
     case 'bulk':
@@ -391,7 +404,6 @@ function workMinutes(ship: Ship) {
   }
 }
 
-const CRUISE_LINES = ['AnyMile Cruises', 'Coral Voyages', 'Pacific Star Line', 'Riviera Seas']
 
 function createShip(kind: ShipKind, berth: Berth, eta: number, callId: string, name?: string): Ship {
   const cls = SHIP_CLASSES[kind]
@@ -440,29 +452,32 @@ function createShip(kind: ShipKind, berth: Berth, eta: number, callId: string, n
   }
   const departPrev = buildVoyageHistory(ship, eta)
 
-  if (kind === 'container' || kind === 'feeder') {
+  if (isBoxShip(kind)) {
     const n = slotCount(cls)
     ship.slots = Array(n).fill(null)
     const fillPct = range(0.62, 0.9)
+    // a big ship at the simulated terminal exchanges only part of its cargo here (two quay cranes work it)
+    let dischargeLeft = berth.cranes && cls.bays! > 10 ? irange(40, 60) : Infinity
     for (let bay = 0; bay < cls.bays!; bay++)
       for (let row = 0; row < cls.rows!; row++) {
         const edge = Math.min(row, cls.rows! - 1 - row)
         const h = Math.min(cls.tiers!, Math.round(fillPct * cls.tiers! + range(-1, 0.8) - (edge === 0 ? 0.6 : 0)))
-        const discharge = irange(0, Math.max(0, h))
+        const discharge = Math.min(dischargeLeft, irange(0, Math.max(0, h)))
+        dischargeLeft -= discharge
         for (let tier = 0; tier < h; tier++) {
           const slot = slotIndex(cls, bay, row, tier)
           const isImport = tier >= h - discharge
-          const c = makeContainer(voyage.prev, isImport ? 'USSAN' : voyage.next, isImport ? 'import' : 'rob', { kind: 'ship', shipId: ship.id, slot })
+          const c = makeContainer(voyage.prev, isImport ? HOME.code : voyage.next, isImport ? 'import' : 'rob', { kind: 'ship', shipId: ship.id, slot })
           c.vesselId = ship.id
           c.vesselName = ship.name
           originHistory(c, ship.name, departPrev, ship.voyageNo)
-          c.status = isImport ? 'On board · discharge at San Diego' : `On board · remains for ${PORTS[voyage.next].name}`
+          c.status = isImport ? `On board · discharge at ${PORT.short}` : `On board · remains for ${PORTS[voyage.next].name}`
           if (isImport) ship.toDischarge.add(c.id)
           ship.slots[slot] = c.id
         }
       }
     ship.plannedDischarge = ship.toDischarge.size
-    ship.plannedLoad = Math.min(irange(14, 30), n - ship.slots.filter(Boolean).length + ship.plannedDischarge)
+    ship.plannedLoad = Math.min(berth.cranes ? irange(14, 30) : Math.round(ship.plannedDischarge * range(0.6, 1)), n - ship.slots.filter(Boolean).length + ship.plannedDischarge)
   } else if (kind === 'carcarrier') {
     const total = irange(3600, 5600)
     const planned = Math.round(total * range(0.55, 0.85))
@@ -470,11 +485,14 @@ function createShip(kind: ShipKind, berth: Berth, eta: number, callId: string, n
   } else if (kind === 'bulk') {
     const total = irange(24, 34) * 1000
     ship.bulk = { cargo: pick(BULK_CARGO), total, remaining: total }
+  } else if (kind === 'tanker') {
+    const total = irange(95, 120) * 1000
+    ship.bulk = { cargo: 'Crude oil (Alaska North Slope)', total, remaining: total }
   } else if (kind === 'multipurpose') {
     const total = irange(9, 12)
     ship.blades = { total, onboard: total, acc: 0 }
   } else if (kind === 'cruise') {
-    ship.passengers = { total: irange(2400, 4600), ashore: 0, line: pick(CRUISE_LINES) }
+    ship.passengers = { total: irange(2400, 4600), ashore: 0, line: pick(PORT.cruiseLines) }
   } else if (cls.navy) {
     const k = kind as 'destroyer' | 'cruiser' | 'amphib' | 'carrier'
     const no = { destroyer: irange(131, 139), cruiser: irange(74, 79), amphib: irange(9, 12), carrier: 82 }[k]
@@ -505,11 +523,14 @@ function setCall(ship: Ship, status: Call['status']) {
 }
 
 /** channel leg from wherever the ship is to the berth's junction node */
+/** inbound lane up to the berth's junction, then aside to its waiting spot if it has one */
+const laneToBerth = (b: Berth, fromNode: number) => [...inboundLane(fromNode, b.junction), ...(b.wait ? [b.wait] : [])]
+
 function sendToBerth(ship: Ship, fromNode = 1) {
   const b = berthById(ship.berthId)
   ship.anchorIdx = undefined
   ship.state = 'inbound'
-  ship.path = buildPath(ship.pos, inboundLane(fromNode, b.junction))
+  ship.path = buildPath(ship.pos, laneToBerth(b, fromNode))
   ship.finalHeading = undefined
   setCall(ship, 'arriving')
 }
@@ -521,7 +542,7 @@ function spawnInbound(call: Call, fromNode = 0) {
   ship.pos = { x: start.x, z: start.z }
   ship.speed = 6
   call.shipId = ship.id
-  ship.history.push({ t: sim.time, event: 'Arrived off San Diego', place: 'Sea buoy · 2 nm SW of Point Loma' })
+  ship.history.push({ t: sim.time, event: PORT.text.arrived, place: PORT.text.seaBuoy })
   if (berthBusy(b, ship)) {
     const taken = new Set(sim.ships.filter((s) => s !== ship && s.anchorIdx !== undefined).map((s) => s.anchorIdx))
     let idx = 0
@@ -549,10 +570,10 @@ function spawnBerthed(call: Call, progress: number) {
   placeAtBerth(ship, b)
   ship.state = 'working'
   ship.ataBerth = call.eta
-  ship.history.push({ t: call.eta - 70, event: 'Entered San Diego Bay', place: 'Ballast Point · main channel' })
+  ship.history.push({ t: call.eta - 70, event: PORT.text.entered, place: PORT.text.enteredPlace })
   ship.history.push({ t: call.eta, event: `All fast · ${b.id}`, place: berthPlace(b) })
   if (!ship.cls.navy) ship.history.push({ t: call.eta + 20, event: ship.kind === 'cruise' ? 'Passenger disembarkation started' : 'Cargo operations started', place: berthPlace(b) })
-  if (ship.kind === 'container' || ship.kind === 'feeder') {
+  if (isBoxShip(ship.kind)) {
     const k = Math.floor(ship.toDischarge.size * progress)
     const ids = [...ship.toDischarge]
     let removed = 0
@@ -567,7 +588,8 @@ function spawnBerthed(call: Call, progress: number) {
         ship.toDischarge.delete(id)
         ship.discharged++
         removed++
-        placeInYardRandom(c, ship)
+        if (b.cranes) placeInYardRandom(c, ship)
+        else autoDischarged(c, ship, b)
       }
   } else if (ship.vehicles) {
     const d = Math.round(ship.vehicles.toDischarge * progress)
@@ -586,8 +608,9 @@ function spawnBerthed(call: Call, progress: number) {
 
 // ───────── speed & collision avoidance
 
+const SPEEDS = PORT.speeds ?? { approach: 3.4, rev: 1.6, manoeuvre: 4 }
 const baseSpeed = (s: Ship) => (p: PathPoint) => {
-  const v = p.hold ? 0.9 : p.rev ? 1.6 : s.state === 'approach' ? 3.4 : s.state === 'inbound' || s.state === 'outbound' ? 11 : 4
+  const v = p.hold ? 0.9 : p.rev ? SPEEDS.rev : s.state === 'approach' ? SPEEDS.approach : s.state === 'inbound' || s.state === 'outbound' ? 11 : SPEEDS.manoeuvre
   return Math.min(v, s.speedCap)
 }
 
@@ -644,23 +667,30 @@ function avoidance(ship: Ship) {
 }
 
 const MANOEUVRING: ShipState[] = ['approach', 'berthing', 'unberthing']
-const inZone = (x: number, z: number, t: TerminalId) => {
+const inZone = (x: number, z: number, t: string) => {
   const zn = ZONES[t]
-  return !!zn && Math.hypot(x - zn.x, z - zn.z) < zn.r
+  return !!zn && (Array.isArray(zn) ? zn : [zn]).some((c) => Math.hypot(x - c.x, z - c.z) < c.r)
 }
 /** a basin is busy for `ship` if anyone else is manoeuvring in it, or other traffic is passing through it */
-function basinClear(ship: Ship, t: TerminalId) {
+function basinClear(ship: Ship, t: string) {
   const zn = ZONES[t]
   if (!zn) return true
   return !sim.ships.some(
-    (o) => o !== ship && !o.static && (MANOEUVRING.includes(o.state) || o.state === 'inbound' || o.state === 'outbound') && inZone(o.pos.x, o.pos.z, t) && !(o.state === 'inbound' && o.berthId === ship.berthId),
+    (o) =>
+      o !== ship &&
+      !o.static &&
+      (MANOEUVRING.includes(o.state) || o.state === 'inbound' || o.state === 'outbound') &&
+      inZone(o.pos.x, o.pos.z, t) &&
+      !(o.state === 'inbound' && o.berthId === ship.berthId) &&
+      // ships queued behind me in the lane are waiting for me, not the other way round
+      !(o.blockedBy === ship.id && o.speed < 0.5),
   )
 }
 /** through traffic holds short of a basin where another vessel is manoeuvring */
 function holdForBasins(ship: Ship) {
   if (ship.state !== 'inbound' && ship.state !== 'outbound') return
-  const mine = berthById(ship.berthId).terminal
-  for (const t of Object.keys(ZONES) as TerminalId[]) {
+  const mine = lockOf(berthById(ship.berthId))
+  for (const t of Object.keys(ZONES)) {
     const holder = shipById(sim.locks[t])
     if (!holder || holder === ship || !MANOEUVRING.includes(holder.state)) continue
     if (t === mine && ship.state === 'inbound') continue // handled by the junction hold
@@ -683,9 +713,11 @@ function stepShip(ship: Ship, dt: number) {
   avoidance(ship)
   holdForBasins(ship)
   if (ship.state === 'inbound' && ship.anchorIdx === undefined) {
-    const holder = sim.locks[b.terminal]
-    // hold short of the junction while another vessel manoeuvres in the basin
-    if (holder && holder !== ship.id && ship.path.length * 0.8 < 320) {
+    const holder = sim.locks[lockOf(b)]
+    // hold short of the junction while another vessel manoeuvres in the basin (berths with a waiting spot wait there instead),
+    // but never stop inside another basin where someone is manoeuvring – keep going and clear it
+    const inBusyBasin = Object.keys(ZONES).some((t) => t !== lockOf(b) && inZone(ship.pos.x, ship.pos.z, t) && MANOEUVRING.includes(shipById(sim.locks[t])?.state ?? 'outbound'))
+    if (holder && holder !== ship.id && !b.wait && !inBusyBasin && ship.path.length * 0.8 < 320) {
       ship.speedCap = 0
       ship.blockedBy = holder
     }
@@ -693,7 +725,7 @@ function stepShip(ship: Ship, dt: number) {
   const done = follow(ship, dt, baseSpeed(ship), 2.2, 0.05)
 
   if (ship.merging) {
-    const e = inboundLane(2, 2)[0]
+    const e = inboundLane(PORT.anchorJoin, PORT.anchorJoin)[0]
     if (Math.hypot(ship.pos.x - e.x, ship.pos.z - e.z) < 40) ship.merging = false
   }
   switch (ship.state) {
@@ -701,17 +733,17 @@ function stepShip(ship: Ship, dt: number) {
       if (done) {
         if (ship.anchorIdx !== undefined) {
           ship.state = 'anchored'
-          ship.history.push({ t: sim.time, event: 'Anchored · awaiting berth', place: `San Diego anchorage A${ship.anchorIdx + 1} (offshore)` })
+          ship.history.push({ t: sim.time, event: 'Anchored · awaiting berth', place: `${PORT.text.anchorage} A${ship.anchorIdx + 1} (offshore)` })
         } else {
           ship.state = 'waiting'
-          ship.history.push({ t: sim.time, event: 'Inside the bay · awaiting berthing window', place: 'Main channel' })
+          ship.history.push({ t: sim.time, event: PORT.text.inside, place: 'Main channel' })
         }
       }
       break
     case 'waiting': {
-      const holder = sim.locks[b.terminal]
-      if ((!holder || holder === ship.id) && basinClear(ship, b.terminal)) {
-        sim.locks[b.terminal] = ship.id
+      const holder = sim.locks[lockOf(b)]
+      if ((!holder || holder === ship.id) && basinClear(ship, lockOf(b))) {
+        sim.locks[lockOf(b)] = ship.id
         ship.state = 'approach'
         ship.path = buildPath(ship.pos, b.arrival(ship.cls.beam, ship.cls.length))
         ship.finalHeading = b.pose(ship.cls.beam, ship.cls.length).heading
@@ -720,15 +752,15 @@ function stepShip(ship: Ship, dt: number) {
       break
     }
     case 'anchored': {
-      const entry = inboundLane(2, 2)[0]
+      const entry = inboundLane(PORT.anchorJoin, PORT.anchorJoin)[0]
       const laneClear = !sim.ships.some((o) => o !== ship && (o.state === 'inbound' || o.state === 'outbound') && Math.hypot(o.pos.x - entry.x, o.pos.z - entry.z) < 1100)
       // one ship at a time leaves the anchorage field
       const nobodyLeaving = !sim.ships.some((o) => o !== ship && o.merging)
       if (laneClear && nobodyLeaving && !berthBusy(b, ship) && !sim.ships.some((s) => s !== ship && s.berthId === b.id && s.state === 'anchored' && (s.anchorIdx ?? 0) < (ship.anchorIdx ?? 0))) {
-        ship.history.push({ t: sim.time, event: 'Anchor aweigh · proceeding to berth', place: 'San Diego anchorage' })
+        ship.history.push({ t: sim.time, event: 'Anchor aweigh · proceeding to berth', place: PORT.text.anchorage })
         const idx = ship.anchorIdx ?? 0
         sendToBerth(ship, 1)
-        ship.path = buildPath(ship.pos, [...anchorageOut(idx), ...inboundLane(2, b.junction)])
+        ship.path = buildPath(ship.pos, [...anchorageOut(idx), ...laneToBerth(b, PORT.anchorJoin)])
         ship.merging = true
       }
       break
@@ -745,9 +777,9 @@ function stepShip(ship: Ship, dt: number) {
       break
     case 'ready': {
       ship.readyTimer += dt
-      const holder = sim.locks[b.terminal]
-      if (ship.readyTimer > 6 && (!holder || holder === ship.id) && basinClear(ship, b.terminal)) {
-        sim.locks[b.terminal] = ship.id
+      const holder = sim.locks[lockOf(b)]
+      if (ship.readyTimer > 6 && (!holder || holder === ship.id) && basinClear(ship, lockOf(b))) {
+        sim.locks[lockOf(b)] = ship.id
         ship.state = 'unberthing'
         ship.path = buildPath(ship.pos, b.departure(ship.cls.beam, ship.cls.length))
         ship.finalHeading = undefined
@@ -758,13 +790,22 @@ function stepShip(ship: Ship, dt: number) {
       break
     }
     case 'unberthing':
-      if (done) {
-        // merge into the outbound lane only with a clear gap to traffic already in it
-        const busy = sim.ships.some((o) => o !== ship && o.state === 'outbound' && Math.hypot(o.pos.x - ship.pos.x, o.pos.z - ship.pos.z) < (o.cls.length + ship.cls.length) / 2 + 160)
+      // (re-checked every frame once the departure manoeuvre is complete, until the lane is clear)
+      if (done || !ship.path.length) {
+        // merge into the outbound lane only with a clear gap to traffic already in it,
+        // and only cross the inbound lane when nobody is coming up it towards the crossing point
+        const k = outboundEntry(ship.pos.x, ship.pos.z, b.junction)
+        const entry = outboundLane(k, k)[0]
+        const busy = sim.ships.some(
+          (o) =>
+            o !== ship &&
+            ((o.state === 'outbound' && Math.hypot(o.pos.x - ship.pos.x, o.pos.z - ship.pos.z) < (o.cls.length + ship.cls.length) / 2 + 160) ||
+              (o.state === 'inbound' && o.speed > 0.5 && Math.hypot(o.pos.x - entry.x, o.pos.z - entry.z) < 650)),
+        )
         if (busy) break
         ship.lockHold = 360
         ship.state = 'outbound'
-        ship.path = buildPath(ship.pos, [...outboundLane(outboundEntry(ship.pos.x, ship.pos.z, b.junction), 1), { x: SEA_SPAWN.x - 300, z: SEA_SPAWN.z + 400 }])
+        ship.path = buildPath(ship.pos, [...outboundLane(k, 1), EXIT])
         ship.history.push({ t: sim.time, event: `Departed for ${PORTS[ship.voyage.next].name}`, place: berthPlace(b) })
         alert(`${ship.name} departed ${b.id} for ${PORTS[ship.voyage.next].name}`, 'blue', { type: 'ship', id: ship.id })
       }
@@ -772,10 +813,15 @@ function stepShip(ship: Ship, dt: number) {
     case 'outbound':
       if (ship.lockHold > 0) {
         ship.lockHold -= ship.speed * dt
-        if (ship.lockHold <= 0 && sim.locks[b.terminal] === ship.id) delete sim.locks[b.terminal]
+        // a departure held up by traffic outside its own basin no longer needs the basin
+        const heldOutside = ship.speed < 0.3 && ZONES[lockOf(b)] && !inZone(ship.pos.x, ship.pos.z, lockOf(b))
+        if ((ship.lockHold <= 0 || heldOutside) && sim.locks[lockOf(b)] === ship.id) {
+          delete sim.locks[lockOf(b)]
+          ship.lockHold = 0
+        }
       }
       if (done) {
-        if (sim.locks[b.terminal] === ship.id) delete sim.locks[b.terminal]
+        if (sim.locks[lockOf(b)] === ship.id) delete sim.locks[lockOf(b)]
         sim.ships.splice(sim.ships.indexOf(ship), 1)
         releaseName(ship.name)
         sim.version++
@@ -785,7 +831,7 @@ function stepShip(ship: Ship, dt: number) {
 }
 
 function arriveBerth(ship: Ship, b: Berth) {
-  if (sim.locks[b.terminal] === ship.id) delete sim.locks[b.terminal]
+  if (sim.locks[lockOf(b)] === ship.id) delete sim.locks[lockOf(b)]
   ship.state = 'working'
   ship.ataBerth = sim.time
   ship.heading = b.pose(ship.cls.beam, ship.cls.length).heading
@@ -800,7 +846,7 @@ function arriveBerth(ship: Ship, b: Berth) {
 
 function planLoad(ship: Ship) {
   if (ship.loadPlan.length || ship.loaded) return
-  const sx = tamtLocal(ship.pos.x, ship.pos.z).x
+  const sx = ctLocal(ship.pos.x, ship.pos.z).x
   const cands: { c: Container; d: number }[] = []
   for (let blk = 0; blk < BLOCKS.length; blk++)
     for (let r = 0; r < YARD_ROWS; r++)
@@ -819,7 +865,7 @@ function planLoad(ship: Ship) {
     c.pod = ship.voyage.next
     c.dest = PORTS[ship.voyage.next].name
     c.status = `Planned load · ${ship.name}`
-    c.history.push({ t: sim.time, event: `Booked on ${ship.name} · ${ship.voyageNo}`, place: 'TAMT planning' })
+    c.history.push({ t: sim.time, event: `Booked on ${ship.name} · ${ship.voyageNo}`, place: `${CT} planning` })
     return c.id
   })
   ship.plannedLoad = ship.loadPlan.length
@@ -829,7 +875,8 @@ function stepWork(ship: Ship, dt: number) {
   const mins = dt * SIM_MIN_PER_SEC
   const b = berthById(ship.berthId)
   let finished = false
-  if (ship.kind === 'container' || ship.kind === 'feeder') {
+  if (isBoxShip(ship.kind) && !b.cranes) finished = stepAutoWork(ship, b, mins)
+  else if (isBoxShip(ship.kind)) {
     if (!ship.toDischarge.size) planLoad(ship)
     const progress = ship.discharged + ship.loaded
     ship.stall = progress === ship.lastProgress ? ship.stall + mins : 0
@@ -840,7 +887,7 @@ function stepWork(ship: Ship, dt: number) {
         if (c && c.loc.kind === 'yard') {
           c.vesselId = undefined
           c.status = 'In yard · rolled to next vessel'
-          c.history.push({ t: sim.time, event: `Rolled · not loaded on ${ship.name}`, place: 'TAMT planning' })
+          c.history.push({ t: sim.time, event: `Rolled · not loaded on ${ship.name}`, place: `${CT} planning` })
         }
       }
       ship.loadPlan = ship.loadPlan.filter((id) => containerById(id)?.loc.kind !== 'yard')
@@ -884,7 +931,7 @@ function stepWork(ship: Ship, dt: number) {
 }
 
 export function shipProgress(ship: Ship) {
-  if (ship.kind === 'container' || ship.kind === 'feeder') {
+  if (isBoxShip(ship.kind)) {
     const total = ship.plannedDischarge + ship.plannedLoad
     return total ? (ship.discharged + ship.loaded) / total : 1
   }
@@ -895,6 +942,73 @@ export function shipProgress(ship: Ship) {
   return 0
 }
 export const shipOnboard = (ship: Ship) => ship.slots.filter(Boolean).length
+
+// ───────── container ships at the other terminals (a full gang of quay cranes, worked at a steady rate)
+
+/** box moves per sim minute across a terminal's crane gang */
+const AUTO_RATE = 3
+export const CRANE_NAME = PORT.ct.crane === 'sts' ? 'STS' : 'MHC'
+const IMPORT_ORIGINS = PORT.id === 'long-beach' ? ['CNSHA', 'CNYTN', 'CNNGB', 'KRPUS', 'TWKHH', 'VNCMT', 'JPYOK'] : ['GTPRQ', 'CRCAL', 'ECGYE', 'MXZLO', 'CNSHA', 'KRPUS']
+
+function autoDischarged(c: Container, ship: Ship, b: Berth, t = sim.time) {
+  const term = terminalById(b.terminal)
+  c.loc = { kind: 'gone', where: `${term?.code ?? b.terminal} yard` }
+  c.vesselId = undefined
+  c.history.push({ t, event: `Discharged · ${ship.name}`, place: `${term?.code ?? b.terminal} ${b.id} · quay crane` })
+  c.history.push({ t: t + 3, event: 'Stacked in yard', place: `${term?.name ?? b.terminal}` })
+  c.status = `In ${term?.code ?? 'terminal'} yard · awaiting pickup`
+}
+
+/** discharge from the top of each stack, then load exports bottom-up into the free slots */
+function stepAutoWork(ship: Ship, b: Berth, mins: number) {
+  ship.autoAcc = (ship.autoAcc ?? 0) + mins * AUTO_RATE
+  const cls = ship.cls
+  while (ship.autoAcc >= 1) {
+    ship.autoAcc -= 1
+    if (ship.toDischarge.size) {
+      let done = false
+      for (let tier = cls.tiers! - 1; tier >= 0 && !done; tier--)
+        for (let bay = 0; bay < cls.bays! && !done; bay++)
+          for (let row = 0; row < cls.rows! && !done; row++) {
+            const slot = slotIndex(cls, bay, row, tier)
+            const id = ship.slots[slot]
+            if (!id || !ship.toDischarge.has(id)) continue
+            if (tier < cls.tiers! - 1 && ship.slots[slotIndex(cls, bay, row, tier + 1)]) continue
+            ship.slots[slot] = null
+            ship.toDischarge.delete(id)
+            ship.discharged++
+            autoDischarged(containerById(id)!, ship, b)
+            done = true
+          }
+      if (!done) ship.toDischarge.clear()
+    } else if (ship.loaded < ship.plannedLoad) {
+      let slot = -1
+      for (let tier = 0; tier < cls.tiers! && slot < 0; tier++)
+        for (let bay = 0; bay < cls.bays! && slot < 0; bay++)
+          for (let row = 0; row < cls.rows! && slot < 0; row++) {
+            const k = slotIndex(cls, bay, row, tier)
+            if (!ship.slots[k] && (tier === 0 || ship.slots[slotIndex(cls, bay, row, tier - 1)])) slot = k
+          }
+      if (slot < 0) {
+        ship.plannedLoad = ship.loaded
+        break
+      }
+      const flow: Container['flow'] = rnd() < 0.7 ? 'export' : 'empty'
+      const c = makeContainer(HOME.code, ship.voyage.next, flow, { kind: 'ship', shipId: ship.id, slot })
+      const term = terminalById(b.terminal)
+      c.vesselId = ship.id
+      c.vesselName = ship.name
+      c.history.push({ t: sim.time - range(600, 3000), event: flow === 'empty' ? 'Gate in · empty return' : 'Gate in · full export', place: `${term?.code ?? b.terminal} gate · truck` })
+      c.history.push({ t: sim.time, event: `Loaded on ${ship.name} · ${ship.voyageNo}`, place: `${term?.code ?? b.terminal} ${b.id} · quay crane` })
+      c.status = `On board ${ship.name} · to ${PORTS[ship.voyage.next].name}`
+      ship.slots[slot] = c.id
+      ship.loaded++
+    } else break
+    ship.cargoVersion++
+    sim.teuToday += 2
+  }
+  return !ship.toDischarge.size && ship.loaded >= ship.plannedLoad
+}
 
 // ═════════════════════════════════════ yard
 
@@ -919,7 +1033,7 @@ function freeStack(nearX: number) {
 }
 
 function placeInYardRandom(c: Container, ship: Ship) {
-  const st = freeStack(tamtLocal(ship.pos.x, ship.pos.z).x)
+  const st = freeStack(ctLocal(ship.pos.x, ship.pos.z).x)
   if (!st) {
     c.loc = { kind: 'gone', where: 'Off-dock' }
     return
@@ -928,7 +1042,7 @@ function placeInYardRandom(c: Container, ship: Ship) {
   sim.yard[slot] = c.id
   c.loc = { kind: 'yard', slot }
   const t = (ship.ataBerth ?? sim.time) + range(25, Math.max(30, sim.time - (ship.ataBerth ?? sim.time)))
-  c.history.push({ t: Math.min(t, sim.time - 1), event: `Discharged · ${ship.name}`, place: 'TAMT · MHC' })
+  c.history.push({ t: Math.min(t, sim.time - 1), event: `Discharged · ${ship.name}`, place: `${CT} · ${CRANE_NAME}` })
   c.history.push({ t: Math.min(t + 4, sim.time), event: 'Stacked in yard', place: yardLabel(slot) })
   c.status = c.reefer ? 'In yard · reefer plugged in' : 'In yard · awaiting customs release'
   c.vesselId = undefined
@@ -947,8 +1061,8 @@ function initYard() {
             const kind = rnd()
             const flow: Container['flow'] = kind < 0.45 ? 'import' : kind < 0.8 ? 'export' : 'empty'
             const reeferBlock = blk === 1 && r === 0
-            const origin = flow === 'import' ? pick(['GTPRQ', 'CRCAL', 'ECGYE', 'MXZLO', 'CNSHA', 'KRPUS']) : 'USSAN'
-            const c = makeContainer(origin, flow === 'import' ? 'USSAN' : pick(['GTPRQ', 'CRCAL', 'USOAK', 'KRPUS']), flow, { kind: 'yard', slot }, reeferBlock ? LINES[5] : undefined)
+            const origin = flow === 'import' ? pick(IMPORT_ORIGINS) : HOME.code
+            const c = makeContainer(origin, flow === 'import' ? HOME.code : pick(EXPORT_DESTS()), flow, { kind: 'yard', slot }, reeferBlock ? LINES[5] : undefined)
             if (reeferBlock && !c.reefer) {
               c.reefer = true
               c.size = "40' RF"
@@ -957,13 +1071,13 @@ function initYard() {
             const age = range(200, 4800)
             if (flow === 'import') {
               originHistory(c, pick(['Azul Horizon', 'Rio Lempa', 'Coral Trader']), sim.time - age - range(4000, 9000), `${irange(400, 409)}N`)
-              c.history.push({ t: sim.time - age, event: 'Discharged', place: 'TAMT · MHC' })
+              c.history.push({ t: sim.time - age, event: 'Discharged', place: `${CT} · ${CRANE_NAME}` })
               c.history.push({ t: sim.time - age + 6, event: 'Stacked in yard', place: yardLabel(slot) })
               const released = rnd() < 0.6
-              if (released) c.history.push({ t: sim.time - age + range(60, 180), event: 'Customs released (CBP)', place: 'TAMT' })
+              if (released) c.history.push({ t: sim.time - age + range(60, 180), event: 'Customs released (CBP)', place: CT })
               c.status = released ? 'In yard · awaiting truck pickup' : 'In yard · customs hold'
             } else {
-              c.history.push({ t: sim.time - age, event: flow === 'empty' ? 'Gate in · empty return' : 'Gate in · full export', place: 'TAMT Gate 1 · truck' })
+              c.history.push({ t: sim.time - age, event: flow === 'empty' ? 'Gate in · empty return' : 'Gate in · full export', place: `${PORT.ct.gate} 1 · truck` })
               c.history.push({ t: sim.time - age + 8, event: 'Stacked in yard', place: yardLabel(slot) })
               c.status = flow === 'empty' ? 'In yard · empty, available' : 'In yard · awaiting vessel'
             }
@@ -990,7 +1104,7 @@ function stepGate(dt: number) {
       if (!c || c.flow !== 'import' || c.status.includes('hold') || c.loc.kind !== 'yard') continue
       sim.yard[slot] = null
       c.loc = { kind: 'gone', where: c.dest }
-      c.history.push({ t: sim.time, event: 'Gate out · full', place: `TAMT Gate 2 · truck to ${c.dest}` })
+      c.history.push({ t: sim.time, event: 'Gate out · full', place: `${PORT.ct.gate} 2 · truck to ${c.dest}` })
       c.status = `Out-gated · en route to ${c.dest}`
       sim.yardVersion++
       sim.teuToday += 2
@@ -1002,8 +1116,8 @@ function stepGate(dt: number) {
     if (!st) return
     const slot = yardSlotIndex(st.blk, st.r, st.s, 0, st.h)
     const flow: Container['flow'] = rnd() < 0.6 ? 'export' : 'empty'
-    const c = makeContainer('USSAN', pick(['GTPRQ', 'CRCAL', 'USOAK', 'KRPUS']), flow, { kind: 'yard', slot })
-    c.history.push({ t: sim.time, event: flow === 'empty' ? 'Gate in · empty return' : 'Gate in · full export', place: 'TAMT Gate 1 · truck' })
+    const c = makeContainer(HOME.code, pick(EXPORT_DESTS()), flow, { kind: 'yard', slot })
+    c.history.push({ t: sim.time, event: flow === 'empty' ? 'Gate in · empty return' : 'Gate in · full export', place: `${PORT.ct.gate} 1 · truck` })
     c.history.push({ t: sim.time + 0.1, event: 'Stacked in yard', place: yardLabel(slot) })
     c.status = flow === 'empty' ? 'In yard · empty, available' : 'In yard · awaiting vessel'
     sim.yard[slot] = c.id
@@ -1012,10 +1126,10 @@ function stepGate(dt: number) {
   }
 }
 
-// ═════════════════════════════════════ cranes (TAMT-local frame)
+// ═════════════════════════════════════ quay cranes (terminal-local frame)
 
 const SAFE_Y = 24
-export const BOOM = 34
+export const BOOM = PORT.ct.boom
 
 export const craneTip = (c: Crane) => ({ x: c.x + Math.sin(c.slew) * c.radius, z: CRANE_Z + Math.cos(c.slew) * c.radius })
 export const transferPos = (c: Crane, idx: number) => ({ x: c.x + (idx === 0 ? -8 : 8), y: LAND_Y + 0.65, z: TRANSFER_Z })
@@ -1031,7 +1145,7 @@ function releaseCrane(c: Crane) {
 }
 
 function assignCranes() {
-  const working = sim.ships.filter((s) => (s.kind === 'container' || s.kind === 'feeder') && s.state === 'working' && (s.toDischarge.size || s.loaded < s.plannedLoad))
+  const working = sim.ships.filter((s) => isBoxShip(s.kind) && berthById(s.berthId).cranes && s.state === 'working' && (s.toDischarge.size || s.loaded < s.plannedLoad))
   const starving = working.find((s) => s.cranes.length === 0)
   if (starving) {
     const rich = working.find((s) => s.cranes.length > 1)
@@ -1041,7 +1155,7 @@ function assignCranes() {
       const keep = craneById(rich.cranes[0])
       if (keep) {
         keep.side = 0
-        keep.targetX = tamtLocal(rich.pos.x, rich.pos.z).x
+        keep.targetX = ctLocal(rich.pos.x, rich.pos.z).x
       }
     }
   }
@@ -1049,11 +1163,11 @@ function assignCranes() {
     if (c.shipId || c.job || c.carrying || c.transfer.some((t) => t.cid || t.reserved)) continue
     const target = working
       .filter((s) => s.cranes.length < (starving && s !== starving ? 1 : 2))
-      .sort((a, b) => a.cranes.length - b.cranes.length || Math.abs(tamtLocal(a.pos.x, a.pos.z).x - c.x) - Math.abs(tamtLocal(b.pos.x, b.pos.z).x - c.x))[0]
+      .sort((a, b) => a.cranes.length - b.cranes.length || Math.abs(ctLocal(a.pos.x, a.pos.z).x - c.x) - Math.abs(ctLocal(b.pos.x, b.pos.z).x - c.x))[0]
     if (!target) continue
     target.cranes.push(c.id)
     c.shipId = target.id
-    const bx = tamtLocal(target.pos.x, target.pos.z).x
+    const bx = ctLocal(target.pos.x, target.pos.z).x
     if (target.cranes.length === 1) {
       c.side = 0
       c.targetX = bx
@@ -1079,12 +1193,34 @@ function bayInReach(c: Crane, ship: Ship, slot: number) {
   const w = slotTamt(ship, slot)
   const d = Math.hypot(w.x - c.x, w.z - CRANE_Z)
   if (d > BOOM - 1 || d < 9) return false
-  const cx = tamtLocal(ship.pos.x, ship.pos.z).x
+  const cx = ctLocal(ship.pos.x, ship.pos.z).x
   if (c.side !== 0 && Math.sign(w.x - cx) !== c.side && Math.abs(w.x - cx) > 4) return false
   return true
 }
 
 const reservedShipSlots = new Set<string>()
+
+/** ship-to-shore cranes gantry along the quay to the next bay they can work (a slewing harbour crane stays put) */
+function gantryToNearest(c: Crane, ship: Ship, type: 'discharge' | 'load') {
+  if (PORT.ct.crane !== 'sts' || c.transfer.some((t) => t.cid && type === 'discharge')) return
+  const cls = ship.cls
+  let bestX: number | null = null
+  for (let bay = 0; bay < cls.bays!; bay++)
+    for (let row = 0; row < cls.rows!; row++) {
+      const h = stackTop(ship, bay, row)
+      const slot = type === 'discharge' ? (h ? slotIndex(cls, bay, row, h - 1) : -1) : h < cls.tiers! ? slotIndex(cls, bay, row, h) : -1
+      if (slot < 0 || reservedShipSlots.has(`${ship.id}:${slot}`)) continue
+      if (type === 'discharge' && !ship.toDischarge.has(ship.slots[slot]!)) continue
+      const x = slotTamt(ship, slot).x
+      // keep clear of the other crane working this ship
+      if (sim.cranes.some((o) => o !== c && o.shipId === ship.id && Math.abs(o.x - x) < 16)) continue
+      if (bestX === null || Math.abs(x - c.x) < Math.abs(bestX - c.x)) bestX = x
+    }
+  if (bestX !== null && Math.abs(bestX - c.x) > 1) {
+    c.targetX = bestX
+    c.status = `Gantry to bay · ${ship.name}`
+  }
+}
 
 function nextCraneJob(c: Crane) {
   const ship = shipById(c.shipId)
@@ -1108,6 +1244,7 @@ function nextCraneJob(c: Crane) {
       }
     if (!best) {
       if (c.side !== 0 && ship.cranes.length > 1) c.side = 0
+      else gantryToNearest(c, ship, 'discharge')
       return
     }
     reservedShipSlots.add(`${ship.id}:${best.slot}`)
@@ -1135,7 +1272,8 @@ function nextCraneJob(c: Crane) {
       if (!best || d < best.d) best = { slot, d }
     }
   if (!best) {
-    c.side = 0
+    if (c.side !== 0) c.side = 0
+    else gantryToNearest(c, ship, 'load')
     return
   }
   reservedShipSlots.add(`${ship.id}:${best.slot}`)
@@ -1260,7 +1398,7 @@ function drop(c: Crane, job: NonNullable<Crane['job']>) {
     ship.toDischarge.delete(cont.id)
     ship.discharged++
     cont.vesselId = undefined
-    cont.history.push({ t: sim.time, event: `Discharged · ${ship.name}`, place: `TAMT ${ship.berthId} · ${c.id}` })
+    cont.history.push({ t: sim.time, event: `Discharged · ${ship.name}`, place: `${CT} ${ship.berthId} · ${c.id}` })
     cont.status = 'On apron · awaiting yard move'
   } else {
     const ship = shipById(job.to.shipId)!
@@ -1272,7 +1410,7 @@ function drop(c: Crane, job: NonNullable<Crane['job']>) {
     cont.loc = { kind: 'ship', shipId: ship.id, slot: job.to.slot }
     const l = slotLocal(ship.cls, job.to.slot)
     cont.flow = cont.flow === 'empty' ? 'empty' : 'export'
-    cont.history.push({ t: sim.time, event: `Loaded on ${ship.name} · ${ship.voyageNo}`, place: `TAMT ${ship.berthId} · Bay ${String(l.bay * 2 + 1).padStart(2, '0')} Row ${String(l.row).padStart(2, '0')} Tier ${82 + l.tier * 2}` })
+    cont.history.push({ t: sim.time, event: `Loaded on ${ship.name} · ${ship.voyageNo}`, place: `${CT} ${ship.berthId} · Bay ${String(l.bay * 2 + 1).padStart(2, '0')} Row ${String(l.row).padStart(2, '0')} Tier ${82 + l.tier * 2}` })
     cont.status = `On board ${ship.name} · to ${PORTS[ship.voyage.next].name}`
   }
 }
@@ -1390,7 +1528,7 @@ function stepRtg(g: Rtg, dt: number) {
   }
 }
 
-// ═════════════════════════════════════ handlers (container forklifts, TAMT-local)
+// ═════════════════════════════════════ handlers (container forklifts / shuttle carriers, terminal-local)
 
 const handlerSpeed = (p: PathPoint) => (p.rev ? 2.4 : 7)
 const STACK_APPROACH = 3.4
@@ -1553,7 +1691,7 @@ function handlerTask(h: Handler) {
             crane.transfer[ti].reserved = false
             cont.loc = { kind: 'transfer', craneId: crane.id, idx: ti }
             cont.status = `On apron · loading ${ship.name}`
-            cont.history.push({ t: sim.time, event: 'Delivered to quay crane', place: `TAMT ${ship.berthId} · ${crane.id}` })
+            cont.history.push({ t: sim.time, event: 'Delivered to quay crane', place: `${CT} ${ship.berthId} · ${crane.id}` })
             h.carrying = null
             h.moves++
           },
@@ -1631,10 +1769,12 @@ function stepTugs(dt: number) {
     if (t.shipId && s) {
       // quay-side berths: push from the water side (ship's +x); finger piers: escort bow/stern
       const lateral = (s.state === 'berthing' || (s.state === 'unberthing' && s.path[0]?.hold)) && !['cruise', 'destroyer', 'cruiser', 'amphib'].includes(s.kind)
-      const w = toWorld(s, lateral ? s.cls.beam / 2 + 3.2 : 0, lateral ? t.offset * s.cls.length * 0.28 : t.offset * (s.cls.length / 2 + 9))
+      // push from whichever side is open water
+      const side = lateral && isLand(toWorld(s, s.cls.beam / 2 + 6, 0).x, toWorld(s, s.cls.beam / 2 + 6, 0).z) ? -1 : 1
+      const w = toWorld(s, lateral ? side * (s.cls.beam / 2 + 3.2) : 0, lateral ? t.offset * s.cls.length * 0.28 : t.offset * (s.cls.length / 2 + 9))
       tx = w.x
       tz = w.z
-      th = lateral ? s.heading - Math.PI / 2 : s.heading
+      th = lateral ? s.heading - (side * Math.PI) / 2 : s.heading
     } else {
       tx = t.home.x
       tz = t.home.z
@@ -1654,13 +1794,13 @@ function stepTugs(dt: number) {
   }
 }
 
-// ═════════════════════════════════════ ro-ro vehicles (NCMT)
+// ═════════════════════════════════════ ro-ro vehicles
 
 let carSeq = 0
 function spawnCar(ship: Ship) {
   const stern = toWorld(ship, -ship.cls.beam / 2 + 2, -ship.cls.length / 2 + 3)
-  const l = toLocalF(NCMT_FRAME, stern.x, stern.z)
-  const P = (lx: number, lz: number) => toWorldF(NCMT_FRAME, lx, lz)
+  const l = toLocalF(RORO_FRAME, stern.x, stern.z)
+  const P = (lx: number, lz: number) => toWorldF(RORO_FRAME, lx, lz)
   const pts: Waypoint[] = [P(l.x - 6, 0), P(l.x - 10, -10), P(l.x - 18, -24), P(l.x + range(-120, 120), range(-150, -40))]
   sim.cars.push({ id: carSeq++, shipId: ship.id, path: buildPath(stern, pts), pos: { ...stern }, heading: ship.heading, speed: 0, color: irange(0, 5) })
 }
@@ -1674,17 +1814,7 @@ function stepCars(dt: number) {
 
 // ═════════════════════════════════════ schedule
 
-const SCHEDULED: Record<string, ShipKind[]> = {
-  B1: ['multipurpose', 'bulk'],
-  B2: ['container'],
-  B3: ['feeder', 'container'],
-  B4: ['feeder', 'container'],
-  N1: ['carcarrier'],
-  N2: ['carcarrier'],
-  C1: ['cruise'],
-  C2: ['cruise'],
-  C3: ['cruise'],
-}
+const SCHEDULED: Record<string, ShipKind[]> = PORT.schedule
 
 function scheduleCalls() {
   for (const b of BERTHS) {
@@ -1693,7 +1823,7 @@ function scheduleCalls() {
     let t = sim.time - range(500, 900)
     for (let i = 0; i < 6; i++) {
       const kind = pick(kinds)
-      const dur = kind === 'cruise' ? range(420, 560) : kind === 'carcarrier' ? range(420, 600) : range(300, 520)
+      const dur = kind === 'cruise' ? range(420, 560) : kind === 'carcarrier' ? range(420, 600) : kind === 'ulcv' ? range(560, 760) : kind === 'neopanamax' ? range(420, 640) : range(300, 520)
       sim.calls.push({ id: `C${callSeq++}`, berthId: b.id, name: shipName(kind), kind, eta: t, etd: t + dur, status: 'planned' })
       t += dur + range(80, 240)
     }
@@ -1707,11 +1837,15 @@ function stepSchedule() {
     // one arrival at a time at the sea buoy
     if (sim.ships.some((s) => Math.hypot(s.pos.x - SEA_SPAWN.x, s.pos.z - SEA_SPAWN.z) < 420)) continue
     call.name = spawnInbound(call).name
+    return
   }
 }
 
+const NAVY_BERTHS = BERTHS.filter((b) => terminalById(b.terminal)?.navy && b.arrival(10, 80).length)
+
 /** naval traffic: now and then a warship sails, and later another one comes home */
 function stepNavy(dt: number) {
+  if (!NAVY_BERTHS.length) return
   sim.navyTimer -= dt * SIM_MIN_PER_SEC
   if (sim.navyTimer > 0) return
   sim.navyTimer = range(90, 180)
@@ -1724,7 +1858,7 @@ function stepNavy(dt: number) {
     s.history.push({ t: sim.time, event: 'Set special sea and anchor detail', place: berthPlace(berthById(s.berthId)) })
     return
   }
-  const free = BERTHS.filter((b) => b.terminal === 'NAVY' && !b.kinds.includes('amphib') && !berthBusy(b))
+  const free = NAVY_BERTHS.filter((b) => !b.kinds.includes('amphib') && !berthBusy(b))
   if (!free.length || sim.ships.some((s) => Math.hypot(s.pos.x - SEA_SPAWN.x, s.pos.z - SEA_SPAWN.z) < 420)) return
   const b = pick(free)
   const call: Call = { id: `C${callSeq++}`, berthId: b.id, name: shipName(b.kinds[0]), kind: b.kinds[0], eta: sim.time + 150, etd: sim.time + 1500, status: 'planned' }
@@ -1760,8 +1894,8 @@ export function stepSim(dtRaw: number) {
 export function initSim() {
   if (sim.ships.length) return
   initYard()
-  sim.cranes = [-60, -38, 49].map((x, i) => ({
-    id: `MHC-${i + 1}`,
+  sim.cranes = PORT.ct.craneXs.map((x, i) => ({
+    id: `${CRANE_NAME}-${i + 1}`,
     x,
     targetX: x,
     slew: 0.2,
@@ -1779,7 +1913,7 @@ export function initSim() {
     status: 'Idle',
   }))
   sim.rtgs = BLOCKS.map((b, i) => ({
-    id: `RTG-${i + 1}`,
+    id: `${PORT.ct.crane === 'sts' ? 'ASC' : 'RTG'}-${i + 1}`,
     block: i,
     x: b.cx,
     trolleyZ: rowZ(1),
@@ -1790,11 +1924,11 @@ export function initSim() {
     moves: irange(30, 60),
     status: 'Standing by',
   }))
-  const ops = ['M. Reyes', 'J. Tran', 'A. Okoro', 'S. Patel', 'L. Kim', 'D. Alvarez']
-  sim.handlers = Array.from({ length: 6 }, (_, i) => {
-    const home = { x: HOME_X, z: -36 - i * 7 }
+  const ops = ['M. Reyes', 'J. Tran', 'A. Okoro', 'S. Patel', 'L. Kim', 'D. Alvarez', 'R. Chen', 'T. Nguyen', 'E. Garcia', 'K. Brooks']
+  sim.handlers = Array.from({ length: PORT.ct.handlers ?? 6 }, (_, i) => {
+    const home = { x: HOME_X + (i >= 6 ? 12 : 0), z: -36 - (i % 6) * 7 }
     return {
-      id: `TL-${String(i + 1).padStart(2, '0')}`,
+      id: `${PORT.ct.crane === 'sts' ? 'SC' : 'TL'}-${String(i + 1).padStart(2, '0')}`,
       home,
       loc: { kind: 'home' as const },
       pos: { ...home },
@@ -1814,23 +1948,21 @@ export function initSim() {
       operator: ops[i],
     }
   })
-  sim.tugs = ['Point Loma', 'Coronado', 'Ballast', 'Shelter', 'Cabrillo', 'Silver Strand'].map((n, i) => {
-    const home = { x: 560 + i * 9, z: 520 + i * 6 }
-    return { id: `TUG-${i + 1}`, name: `Tug ${n}`, home, pos: { ...home }, heading: Math.PI / 2, path: [], speed: 0, offset: 1 }
-  })
-  sim.laydown = 4
+  sim.tugs = PORT.tugs.map((t, i) => ({ id: `TUG-${i + 1}`, name: `Tug ${t.name}`, home: { ...t.home }, pos: { ...t.home }, heading: Math.PI / 2, path: [], speed: 0, offset: 1 }))
+  sim.laydown = PORT.id === 'san-diego' ? 4 : 0
 
   scheduleCalls()
+  const starts = new Map(PORT.init.inbound.map((x) => [x.berth, x.node]))
   for (const b of BERTHS) {
     const calls = sim.calls.filter((c) => c.berthId === b.id).sort((a, c) => a.eta - c.eta)
     for (const call of calls) {
       if (call.etd < sim.time) call.status = 'departed'
       else if (call.eta <= sim.time && call.etd > sim.time) {
-        if (b.id === 'B4' || b.id === 'N2' || b.id === 'C3') {
-          // these three start out sailing in, so there is traffic in the channel from the first second
+        if (starts.has(b.id)) {
+          // these start out sailing in, so there is traffic in the channel from the first second
           call.eta = sim.time + 60
           call.etd = call.eta + 400
-          const s = spawnInbound(call, b.id === 'N2' ? 14 : b.id === 'B4' ? 10 : 6)
+          const s = spawnInbound(call, starts.get(b.id)!)
           call.name = s.name
           s.eta = call.eta
         } else {
@@ -1843,7 +1975,7 @@ export function initSim() {
       }
     }
   }
-  for (const b of BERTHS.filter((x) => x.terminal === 'NAVY')) {
+  for (const b of NAVY_BERTHS) {
     if (rnd() < 0.2) continue
     const kind = pick(b.kinds)
     const call: Call = { id: `C${callSeq++}`, berthId: b.id, name: shipName(kind), kind, eta: sim.time - range(600, 6000), etd: sim.time + range(600, 3000), status: 'working' }
@@ -1852,40 +1984,45 @@ export function initSim() {
     if (s.kind === 'amphib') s.static = true
     call.name = s.name
   }
-  {
-    const call: Call = { id: `C${callSeq++}`, berthId: 'NI1', name: shipName('carrier'), kind: 'carrier', eta: sim.time - 9000, etd: sim.time + 20000, status: 'working' }
+  for (const st of PORT.init.statics ?? []) {
+    const call: Call = { id: `C${callSeq++}`, berthId: st.berth, name: st.name ?? shipName(st.kind), kind: st.kind, eta: sim.time - 9000, etd: sim.time + 20000, status: 'working' }
     sim.calls.push(call)
     const s = spawnBerthed(call, 0)
     s.static = true
     call.name = s.name
   }
-  const b2next = sim.calls.find((c) => c.berthId === 'B2' && c.status === 'planned')
-  if (b2next) {
-    b2next.eta = sim.time + 40
-    const s = spawnInbound(b2next)
-    b2next.name = s.name
+  const waitFor = PORT.init.anchoredFor
+  const anchoredNext = waitFor ? sim.calls.find((c) => c.berthId === waitFor && c.status === 'planned') : undefined
+  if (anchoredNext) {
+    anchoredNext.eta = sim.time + 40
+    const s = spawnInbound(anchoredNext)
+    anchoredNext.name = s.name
     s.pos = { ...anchorage(0) }
     s.path = []
     s.state = 'anchored'
     s.anchorIdx = 0
     s.heading = -Math.PI / 4
     s.finalHeading = -Math.PI / 4
-    s.history.push({ t: sim.time - 50, event: 'Anchored · awaiting berth', place: 'San Diego anchorage A1 (offshore)' })
+    s.history.push({ t: sim.time - 50, event: 'Anchored · awaiting berth', place: `${PORT.text.anchorage} A1 (offshore)` })
   }
-  const dep = createShip('container', berthById('B3'), sim.time - 420, `C${callSeq++}`)
-  dep.state = 'outbound'
-  const st = outboundLane(9, 9)[0]
-  dep.pos = { x: st.x, z: st.z }
-  dep.path = buildPath(dep.pos, [...outboundLane(8, 1), { x: SEA_SPAWN.x - 300, z: SEA_SPAWN.z + 400 }])
-  dep.heading = Math.atan2(dep.path[0].x - dep.pos.x, dep.path[0].z - dep.pos.z)
-  dep.speed = 8
-  dep.etd = sim.time - 30
-  dep.ataBerth = sim.time - 420
-  dep.history.push({ t: sim.time - 420, event: 'All fast · B3', place: 'Tenth Avenue Marine Terminal' })
-  dep.history.push({ t: sim.time - 30, event: `Departed for ${PORTS[dep.voyage.next].name}`, place: 'Tenth Avenue Marine Terminal' })
-  sim.calls.push({ id: dep.callId, berthId: 'B3', name: dep.name, kind: 'container', eta: sim.time - 420, etd: sim.time - 30, shipId: dep.id, status: 'departed' })
-  alert('Reefer block B row 1 · pre-trip inspection due', 'amber')
-  if (b2next?.shipId) alert(`${b2next.name} waiting at anchorage A1 — B2 occupied`, 'amber', { type: 'ship', id: b2next.shipId })
+  const d = PORT.init.departed
+  if (d) {
+    const db = berthById(d.berth)
+    const dep = createShip(d.kind, db, sim.time - 420, `C${callSeq++}`)
+    dep.state = 'outbound'
+    const st = outboundLane(d.node, d.node)[0]
+    dep.pos = { x: st.x, z: st.z }
+    dep.path = buildPath(dep.pos, [...outboundLane(d.node - 1, 1), EXIT])
+    dep.heading = Math.atan2(dep.path[0].x - dep.pos.x, dep.path[0].z - dep.pos.z)
+    dep.speed = 8
+    dep.etd = sim.time - 30
+    dep.ataBerth = sim.time - 420
+    dep.history.push({ t: sim.time - 420, event: `All fast · ${db.id}`, place: berthPlace(db) })
+    dep.history.push({ t: sim.time - 30, event: `Departed for ${PORTS[dep.voyage.next].name}`, place: berthPlace(db) })
+    sim.calls.push({ id: dep.callId, berthId: db.id, name: dep.name, kind: d.kind, eta: sim.time - 420, etd: sim.time - 30, shipId: dep.id, status: 'departed' })
+  }
+  alert(`Reefer block B row 1 · pre-trip inspection due`, 'amber')
+  if (anchoredNext?.shipId) alert(`${anchoredNext.name} waiting at anchorage A1 — ${waitFor} occupied`, 'amber', { type: 'ship', id: anchoredNext.shipId })
 }
 
 export { CONTAINER }

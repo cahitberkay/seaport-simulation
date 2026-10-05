@@ -1,5 +1,6 @@
 // Yachts moored along the floating docks of San Diego Bay's marinas (docks and marina areas from OpenStreetMap).
 import { GEO, pointInRing } from './geo'
+import { PORT_ID } from '../ports/registry'
 
 export interface Yacht {
   x: number
@@ -41,7 +42,7 @@ export const MARINAS: MarinaInfo[] = GEO.marinas.map((m) => {
 })
 
 // marinas OSM tags only through their docks (no basin outline)
-const NAMED_BASINS = [{ name: 'Marriott Marquis San Diego Marina', x: -60, z: -140 }]
+const NAMED_BASINS = PORT_ID === 'san-diego' ? [{ name: 'Marriott Marquis San Diego Marina', x: -60, z: -140 }] : []
 
 /** docks are the OSM pier lines inside a marina basin, or explicitly named "… Dock" */
 export const DOCKS: { c: [number, number][]; marina: number; name: string }[] = []

@@ -15,8 +15,8 @@ export default function App() {
         <div className="hud-top">
           {showPanels && <LeftColumn />}
           <div className="right-col">
-            <MapToolbar />
             {showPanels && <RightColumn />}
+            <MapToolbar />
           </div>
         </div>
         <JourneyStrip />

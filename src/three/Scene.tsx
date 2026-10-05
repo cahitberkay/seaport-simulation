@@ -3,7 +3,7 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { CameraControls, Html, Line } from '@react-three/drei'
 import * as THREE from 'three'
 import {
-  sim, stepSim, initSim, shipById, containerById, craneById, rtgById, handlerById, slotWorld, yardLocal, craneTip, transferPos, toWorld, tamtWorld,
+  sim, stepSim, initSim, shipById, containerById, craneById, rtgById, handlerById, slotWorld, yardLocal, craneTip, transferPos, toWorld, ctWorld,
 } from '../sim/sim'
 import { buildPath } from '../sim/path'
 import { GEO } from '../sim/geo'
@@ -11,7 +11,7 @@ import { STALLS } from '../sim/parking'
 import { YACHTS } from '../sim/marina'
 import { PLACES, LOGISTICS, MARINA_PLACES, placeById, STATUE_ID } from '../sim/places'
 import type { Place } from '../sim/places'
-import { LAND_Y, CRANE_Z, TAMT_FRAME, MIDWAY_POSE, berthById, outboundLane, outboundEntry, rowZ, FRONT_OFFSET } from '../sim/world'
+import { LAND_Y, CRANE_Z, CT_FRAME, MIDWAY_POSE, PORT, berthById, outboundLane, outboundEntry, rowZ, FRONT_OFFSET } from '../sim/world'
 import { useUI } from '../store'
 import type { Selection, Tab } from '../store'
 import { Water } from './Water'
@@ -20,36 +20,40 @@ import { Terminal } from './Terminal'
 import { Ships, TugModel } from './Ships'
 import { MovingCars, Wakes } from './Equipment'
 import { LIGHT } from './light'
+import { bootDone } from '../ports/registry'
 
 initSim()
 
 // ───────── camera views per tab
 
-const n = { x: -TAMT_FRAME.uz, z: TAMT_FRAME.ux } // TAMT water normal
-const u = { x: TAMT_FRAME.ux, z: TAMT_FRAME.uz }
+const n = { x: -CT_FRAME.uz, z: CT_FRAME.ux } // main terminal water normal
+const u = { x: CT_FRAME.ux, z: CT_FRAME.uz }
 function tabPose(t: Tab): [number, number, number, number, number, number] {
   switch (t) {
     case 'overview':
-      return [100, 6200, 6300, -500, 0, 700]
+      return PORT.cameras.overview
     case 'vessels':
-      return [-170, 340, -160, -530, 0, -610]
+      return PORT.cameras.vessels
     case 'yard': {
-      const c = tamtWorld(10, -45)
+      const c = ctWorld(10, -45)
       return [c.x + n.x * 200 + u.x * 120, 210, c.z + n.z * 200 + u.z * 120, c.x, 0, c.z]
     }
     case 'shipments': {
-      const c = tamtWorld(-20, 8)
+      const c = ctWorld(-20, 8)
       return [c.x + n.x * 230 - u.x * 90, 170, c.z + n.z * 230 - u.z * 90, c.x, 0, c.z]
     }
     case 'logistics':
-      return [1650, 900, 1500, 900, 0, 650]
+      return PORT.cameras.logistics
   }
 }
 
 function SimDriver() {
   const bump = useUI((s) => s.bump)
   const acc = useRef(0)
+  const frames = useRef(0)
   useFrame((_, dt) => {
+    // a few frames in, everything (city, yards, ships) has been uploaded and drawn: drop the loading screen
+    if (++frames.current === 3) bootDone()
     stepSim(dt)
     acc.current += dt
     if (acc.current > 0.25) {
@@ -72,8 +76,8 @@ interface Pose {
 }
 
 const fromTamt = (lx: number, y: number, lz: number, rot: number) => {
-  const w = tamtWorld(lx, lz)
-  return { x: w.x, y, z: w.z, rot: rot + TAMT_FRAME.rot }
+  const w = ctWorld(lx, lz)
+  return { x: w.x, y, z: w.z, rot: rot + CT_FRAME.rot }
 }
 
 function selectionPose(sel: Selection): Pose | null {
@@ -82,7 +86,7 @@ function selectionPose(sel: Selection): Pose | null {
     case 'ship': {
       const s = shipById(sel.id)
       if (!s) return null
-      const h = s.kind === 'cruise' || s.kind === 'carrier' || s.kind === 'amphib' ? 26 : s.kind === 'carcarrier' ? 20 : 17
+      const h = s.kind === 'cruise' || s.kind === 'carrier' || s.kind === 'amphib' ? 26 : s.kind === 'carcarrier' ? 20 : s.kind === 'ulcv' || s.kind === 'neopanamax' ? 22 : 17
       return { x: s.pos.x, y: h / 2 - 1, z: s.pos.z, rot: s.heading, size: [s.cls.beam + 3, h, s.cls.length + 6], label: s.name }
     }
     case 'container': {
@@ -164,7 +168,10 @@ function selectionPose(sel: Selection): Pose | null {
       return y ? { x: y.x, y: 1.4, z: y.z, rot: y.heading, size: [y.beam + 1, y.kind === 'super' ? 6 : 3.2, y.length + 1], label: 'Yacht' } : null
     }
     case 'place': {
-      if (sel.id === 'midway') return { x: MIDWAY_POSE.x, y: 8, z: MIDWAY_POSE.z, rot: MIDWAY_POSE.heading, size: [32, 18, 160], label: 'USS Midway Museum' }
+      if (sel.id === 'midway' && MIDWAY_POSE) return { x: MIDWAY_POSE.x, y: 8, z: MIDWAY_POSE.z, rot: MIDWAY_POSE.heading, size: [32, 18, 160], label: 'USS Midway Museum' }
+      const qm = PORT.QUEEN_MARY
+      if (sel.id === 'queen-mary' && qm) return { x: qm.x, y: 10, z: qm.z, rot: qm.heading, size: [22, 26, qm.length + 6], label: 'The Queen Mary' }
+      if (sel.id === 'cruise-dome') return { x: 967, y: LAND_Y + 11, z: -68, rot: 0, size: [66, 24, 66], label: 'Long Beach Cruise Terminal' }
       const p = placeById(sel.id)
       if (!p) return null
       if (sel.id === STATUE_ID) return { x: p.x, y: LAND_Y + 4, z: p.z, rot: 0, size: [6, 8.5, 6], label: p.name }

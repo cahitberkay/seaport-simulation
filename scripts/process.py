@@ -14,10 +14,20 @@ from shapely.ops import linemerge, polygonize, unary_union, nearest_points
 from shapely import affinity
 
 HERE = os.path.dirname(__file__)
-CACHE = os.path.join(HERE, 'cache')
-OUT = os.path.join(HERE, '..', 'src', 'data', 'geo.json')
 
-LAT0, LON0 = 32.705, -117.165
+# one entry per modelled port: projection origin, coastline clip box (lon0, lat0, lon1, lat1) and output file
+CONFIGS = {
+    'san-diego': {'cache': 'cache', 'out': 'geo.json', 'origin': (32.705, -117.165), 'bbox': (-117.295, 32.545, -117.055, 32.765),
+                  'skip': {'USS Midway Museum'}},
+    'long-beach': {'cache': 'cache-lb', 'out': 'geo-lb.json', 'origin': (33.75, -118.21), 'bbox': (-118.31, 33.67, -118.07, 33.80),
+                   'skip': {'Queen Mary', 'RMS Queen Mary'}},
+}
+PORT = next((a[7:] for a in sys.argv if a.startswith('--port=')), 'san-diego')
+CFG = CONFIGS[PORT]
+CACHE = os.path.join(HERE, CFG['cache'])
+OUT = os.path.join(HERE, '..', 'src', 'data', CFG['out'])
+
+LAT0, LON0 = CFG['origin']
 KX = 111320 * math.cos(math.radians(LAT0)) / 2
 KZ = 110574 / 2
 
@@ -52,7 +62,7 @@ def build_land():
     ways = [w for w in load('coast.json') if w['type'] == 'way']
     lines = [LineString([(p['lon'], p['lat']) for p in w['geometry']]) for w in ways]
     merged = linemerge(lines)
-    bbox = box(-117.295, 32.545, -117.055, 32.765)
+    bbox = box(*CFG['bbox'])
     clipped = merged.intersection(bbox)
     faces = list(polygonize(unary_union([clipped, bbox.boundary])))
     segs = []
@@ -154,7 +164,7 @@ def build_buildings(land):
                 continue
         area_m2 = pg.area * (KX * 2) * (KZ * 2)
         name = t.get('name')
-        if name == 'USS Midway Museum':
+        if name in CFG['skip']:
             continue
         if area_m2 < 90 and not name:
             continue
@@ -264,13 +274,56 @@ def build_pois():
     return out
 
 
-def build_bridge():
+def build_bridges():
+    """high bridges as centrelines with a deck-height profile (units above water)"""
     els = json.load(open(os.path.join(CACHE, 'bridge.json')))['elements']
-    ways = {w['id']: [proj(p['lon'], p['lat']) for p in w['geometry']] for w in els}
-    main_span = ways[153343716]
-    coronado = list(reversed(ways[6055495]))
-    pts = [(990.0, 310.0)] + main_span + coronado[1:]
-    return [[r(x), r(z)] for x, z in pts]
+    if PORT == 'san-diego':
+        ways = {w['id']: [proj(p['lon'], p['lat']) for p in w['geometry']] for w in els}
+        main_span = ways[153343716]
+        coronado = list(reversed(ways[6055495]))
+        pts = [(990.0, 310.0)] + main_span + coronado[1:]
+        return [{'n': 'San Diego–Coronado Bridge', 'c': [[r(x), r(z)] for x, z in pts], 'peak': 30, 'color': '#3d74e8'}]
+    out = []
+    # (name, deck clearance in units, colour); one carriageway each is enough at this scale
+    spec = [('Long Beach International Gateway', 31, '#f4f6fa'), ('Vincent Thomas Bridge', 28, '#4f8fe0'), ('Commodore Schuyler F. Heim Bridge', 9, '#c9ced9')]
+    for name, peak, color in spec:
+        lines = [LineString([(p['lon'], p['lat']) for p in w['geometry']]) for w in els if w.get('tags', {}).get('bridge:name') == name]
+        if not lines:
+            continue
+        merged = linemerge(lines)
+        parts = list(merged.geoms) if hasattr(merged, 'geoms') else [merged]
+        best = max(parts, key=lambda g: g.length)
+        pts = [proj(x, y) for x, y in best.coords]
+        out.append({'n': name, 'c': [[r(x), r(z)] for x, z in pts], 'peak': peak, 'color': color})
+    return out
+
+
+def build_yards():
+    """named container-terminal outlines (Port of Los Angeles side), filled with container stacks in the app"""
+    path = os.path.join(CACHE, 'landuse.json')
+    if not os.path.exists(path):
+        return []
+    out = []
+    pat = ('Container Terminal', 'Pier 400', 'Pier 300', 'TraPac', 'Yusen', 'Evergreen')
+    for e in load('landuse.json'):
+        t = e.get('tags', {})
+        n = t.get('name', '')
+        if not any(k in n for k in pat):
+            continue
+        rings = []
+        if e['type'] == 'way' and 'geometry' in e:
+            rings = [[(q['lon'], q['lat']) for q in e['geometry']]]
+        elif e['type'] == 'relation':
+            lines = [LineString([(q['lon'], q['lat']) for q in m['geometry']]) for m in e.get('members', []) if m.get('role') in ('outer', '') and len(m.get('geometry', [])) > 1]
+            rings = [list(pg.exterior.coords) for pg in polygonize(linemerge(lines))] if lines else []
+        for ring in rings:
+            if len(ring) >= 4:
+                pg = Polygon(ring)
+                if not pg.is_valid:
+                    pg = pg.buffer(0)
+                if isinstance(pg, Polygon) and not pg.is_empty:
+                    out.append({'n': n, 'p': ring_xy(pg.simplify(0.00002).exterior.coords, 1)})
+    return out
 
 
 def main():
@@ -294,7 +347,8 @@ def main():
         'breakwaters': breakwaters,
         'runways': runways,
         'pois': pois,
-        'bridge': build_bridge(),
+        'bridges': build_bridges(),
+        'yards': build_yards() if PORT != 'san-diego' else [],
         'attribution': '© OpenStreetMap contributors (ODbL)',
     }
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
@@ -332,6 +386,8 @@ def main():
             ax.set_ylim(-z1, -z0)
         ax.grid(True, lw=0.3)
         out = [a for a in sys.argv if a.startswith('--png=')]
+        for bd in data['bridges']:
+            ax.plot([q[0] for q in bd['c']], [-q[1] for q in bd['c']], color='blue', lw=1.5)
         fig.savefig(out[0][6:] if out else os.path.join(CACHE, 'map.png'), dpi=110, bbox_inches='tight')
 
 

@@ -2,9 +2,9 @@ import { useMemo } from 'react'
 import * as THREE from 'three'
 import { sim } from '../sim/sim'
 import { useUI } from '../store'
-import { LAND_Y, TAMT_FRAME, BLOCKS, YARD_STACKS, STACK_PITCH, rowZ, FRONT_OFFSET } from '../sim/world'
+import { LAND_Y, CT_FRAME, PORT, BLOCKS, YARD_STACKS, STACK_PITCH, rowZ, FRONT_OFFSET } from '../sim/world'
 import { concrete } from './textures'
-import { CraneModel, RtgModel, HandlerModel, LooseContainers, YardContainers, Laydown } from './Equipment'
+import { CraneModel, StsModel, RtgModel, HandlerModel, LooseContainers, YardContainers, Laydown } from './Equipment'
 
 const std = (p: THREE.MeshStandardMaterialParameters) => new THREE.MeshStandardMaterial({ roughness: 0.85, ...p })
 const MAT = {
@@ -23,21 +23,19 @@ function Apron() {
     t.repeat.set(24, 5)
     return std({ map: t })
   }, [])
-  // the terminal pavement follows the TAMT outline: the NW face tapers in towards the sheds
+  // the terminal pavement follows the terminal outline (shape y = metres inland)
+  const apron = PORT.ct.apron
+  const x0 = Math.min(...apron.map((p) => p[0]))
+  const x1 = Math.max(...apron.filter((p) => p[1] === 0).map((p) => p[0]))
   const geo = useMemo(() => {
-    const s = new THREE.Shape([
-      new THREE.Vector2(-196, 0),
-      new THREE.Vector2(196, 0),
-      new THREE.Vector2(214, 78),
-      new THREE.Vector2(-150, 78),
-    ])
+    const s = new THREE.Shape(apron.map(([x, y]) => new THREE.Vector2(x, y)))
     const g = new THREE.ShapeGeometry(s)
     g.rotateX(-Math.PI / 2)
     g.translate(0, LAND_Y + 0.025, 0)
     return g
   }, [])
   const bollards = []
-  for (let x = -190; x < 196; x += 14) bollards.push(x)
+  for (let x = x0 + 6; x < x1; x += 14) bollards.push(x)
   return (
     <group>
       <mesh geometry={geo} material={conc} receiveShadow />
@@ -51,9 +49,15 @@ function Apron() {
           <boxGeometry args={[2.2, 2.4, 0.8]} />
         </mesh>
       ))}
-      <mesh material={MAT.yellow} position={[0, LAND_Y + 0.04, -2.2]} rotation={[-Math.PI / 2, 0, 0]}>
-        <planeGeometry args={[392, 0.25]} />
+      <mesh material={MAT.yellow} position={[(x0 + x1) / 2, LAND_Y + 0.04, -2.2]} rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[x1 - x0 - 4, 0.25]} />
       </mesh>
+      {PORT.ct.crane === 'sts' &&
+        [-2, -17].map((z) => (
+          <mesh key={`rail${z}`} material={MAT.steel} position={[(x0 + x1) / 2, LAND_Y + 0.06, z]} rotation={[-Math.PI / 2, 0, 0]}>
+            <planeGeometry args={[x1 - x0 - 4, 0.5]} />
+          </mesh>
+        ))}
       {BLOCKS.map((b) =>
         [0, 1, 2].map((r) => (
           <mesh key={`${b.id}${r}`} material={MAT.yellow} position={[b.cx, LAND_Y + 0.04, rowZ(r) + FRONT_OFFSET + 0.9]} rotation={[-Math.PI / 2, 0, 0]}>
@@ -73,7 +77,7 @@ function Apron() {
         </group>
       ))}
       {/* light masts */}
-      {[-150, -60, 30, 120, 190].map((x) => (
+      {PORT.ct.lights.map((x) => (
         <group key={x} position={[x, LAND_Y, -38]}>
           <mesh material={MAT.steel} position={[0, 11, 0]}>
             <boxGeometry args={[0.5, 22, 0.5]} />
@@ -91,9 +95,7 @@ function Equipment() {
   useUI((s) => s.tick)
   return (
     <>
-      {sim.cranes.map((c) => (
-        <CraneModel key={c.id} crane={c} />
-      ))}
+      {sim.cranes.map((c) => (PORT.ct.crane === 'sts' ? <StsModel key={c.id} crane={c} /> : <CraneModel key={c.id} crane={c} />))}
       {sim.rtgs.map((g) => (
         <RtgModel key={g.id} g={g} />
       ))}
@@ -105,10 +107,10 @@ function Equipment() {
   )
 }
 
-/** Tenth Avenue Marine Terminal, drawn in its own quay-aligned frame */
+/** the fully simulated terminal (TAMT / LBCT), drawn in its own quay-aligned frame */
 export function Terminal() {
   return (
-    <group position={[TAMT_FRAME.ox, 0, TAMT_FRAME.oz]} rotation={[0, TAMT_FRAME.rot, 0]}>
+    <group position={[CT_FRAME.ox, 0, CT_FRAME.oz]} rotation={[0, CT_FRAME.rot, 0]}>
       <Apron />
       <YardContainers />
       <Laydown />

@@ -244,25 +244,29 @@ button {
   padding: 1px 6px;
 }
 .search-results {
-  position: absolute;
-  top: 44px;
-  left: 0;
-  right: 0;
-  padding: 6px;
-  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  margin-top: 6px;
 }
 .search-results button {
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
   width: 100%;
-  padding: 8px 10px;
+  padding: 7px 10px;
   border-radius: 8px;
+  text-align: left;
+}
+.search-results b {
+  font-size: 13px;
 }
 .search-results button:hover {
   background: var(--grey-soft);
 }
 .search-results span {
   color: var(--muted);
+  font-size: 12px;
 }
 .site-select {
   position: relative;
@@ -916,7 +920,7 @@ button {
   }
 }
 @media (max-width: 760px) {
-  .search,
+  .search-wrap,
   .live,
   .bell,
   .kpis,
@@ -1358,7 +1362,7 @@ button {
 .g-axis .g-track {
   height: 16px;
 }
-.g-axis span {
+.g-axis .g-track span {
   position: absolute;
   font-size: 10.5px;
   color: var(--muted);
@@ -1503,7 +1507,9 @@ button {
   .views button {
     padding: 6px 8px;
   }
-  .site,
+  .site:not(.port-switch),
+  .search-btn span,
+  .search-btn kbd,
   .dock-legend {
     display: none;
   }
@@ -1629,6 +1635,8 @@ button {
 .k-carcarrier { background: #8b5cf6; }
 .k-bulk, .k-multipurpose { background: #f08a0b; }
 .k-feeder { background: #6f9bff; }
+.k-ulcv { background: #1e3a8a; }
+.k-tanker { background: #7a8296; }
 .k-logistics { background: #f08a0b; border-radius: 50%; }
 .tiles.three {
   grid-template-columns: 1fr 1fr 1fr;
@@ -1893,4 +1901,152 @@ button {
 }
 .pin-marina {
   border: 1px solid #bfe9e4;
+}
+
+/* ───────── port switcher */
+.port-switch {
+  position: relative;
+}
+.port-switch .site-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px 6px 8px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  color: inherit;
+}
+.port-switch .site-btn:hover,
+.port-switch.open .site-btn {
+  border-color: var(--line);
+  background: var(--grey-soft);
+}
+.port-switch .site-btn > span:nth-child(2) {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+.port-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 300px;
+  padding: 6px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+}
+.port-menu-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  padding: 6px 8px 4px;
+}
+.port-menu button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px;
+  border-radius: 10px;
+  text-align: left;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.port-menu button > span:nth-child(2) {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+  flex: 1;
+}
+.port-menu button b {
+  font-size: 13px;
+}
+.port-menu button small {
+  font-size: 11px;
+  color: var(--muted);
+}
+.port-menu button:hover,
+.port-menu button.on {
+  background: var(--accent-soft);
+}
+.port-check {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* ───────── compact search: a button in the top bar that drops down a search panel */
+.search-wrap {
+  position: relative;
+}
+.search-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.search-btn:hover,
+.search-btn.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.search-btn kbd {
+  font: 600 11px Inter;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 1px 6px;
+}
+.search-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 380px;
+  padding: 8px;
+  z-index: 60;
+  background: #fff;
+}
+.search-pop .search {
+  width: 100%;
+}
+.search-hint {
+  margin: 8px 6px 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.is-night .search-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+.is-night .search-pop,
+.is-night .port-menu {
+  background: #161e34;
+}
+
+/* port switcher: one line per text, opaque menu over the panels below */
+.port-switch {
+  flex-shrink: 0;
+}
+.port-switch .site-btn b,
+.port-switch .site-btn small {
+  white-space: nowrap;
+}
+.port-menu {
+  background: #fff;
+}
+.port-menu button small {
+  white-space: nowrap;
 }

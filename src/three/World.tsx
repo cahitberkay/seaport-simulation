@@ -5,7 +5,8 @@ import * as THREE from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 import { GEO, pointInRing } from '../sim/geo'
 import type { XZ } from '../sim/geo'
-import { LAND_Y, MIDWAY_POSE } from '../sim/world'
+import { LAND_Y, MIDWAY_POSE, PORT } from '../sim/world'
+import { Bridges, OtherTerminals, QueenMary, CruiseDome, ThumsIslands } from './Harbour'
 import { STALLS, CAR_COLORS } from '../sim/parking'
 import { YACHTS, DOCKS } from '../sim/marina'
 import { PLACES, STATUE_ID } from '../sim/places'
@@ -241,69 +242,11 @@ function Runways() {
   return geo ? <mesh geometry={geo} material={MAT.runway} receiveShadow /> : null
 }
 
-// ───────── San Diego–Coronado Bridge (OSM centreline, rising to ~61 m over the channel)
-
-function Bridge() {
-  const segs = useMemo(() => {
-    const pts = GEO.bridge.map(([x, z]) => new THREE.Vector2(x, z))
-    const cum = [0]
-    for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + pts[i].distanceTo(pts[i - 1]))
-    // the high span is over the main channel; the Coronado end curves down onto 4th Street
-    const peak = cum[pts.findIndex((p) => p.y > 650) || 0]
-    const total = cum[cum.length - 1]
-    const h = (s: number) => {
-      const up = Math.min(1, s / peak)
-      const down = Math.max(0, 1 - (s - peak) / (total * 0.62 - peak + 1))
-      return LAND_Y + 1.5 + 30 * Math.sin((Math.PI / 2) * Math.min(up, s > peak ? down : 1)) ** 1.1
-    }
-    const out: { x: number; y: number; z: number; len: number; heading: number; pitch: number; pier: boolean }[] = []
-    for (let i = 0; i < pts.length - 1; i++) {
-      const a = pts[i]
-      const b = pts[i + 1]
-      const ya = h(cum[i])
-      const yb = h(cum[i + 1])
-      const len = a.distanceTo(b)
-      const steps = Math.max(1, Math.ceil(len / 20))
-      for (let k = 0; k < steps; k++) {
-        const t0 = k / steps
-        const t1 = (k + 1) / steps
-        const x0 = a.x + (b.x - a.x) * t0
-        const z0 = a.y + (b.y - a.y) * t0
-        const x1 = a.x + (b.x - a.x) * t1
-        const z1 = a.y + (b.y - a.y) * t1
-        const y0 = ya + (yb - ya) * t0
-        const y1 = ya + (yb - ya) * t1
-        const l = Math.hypot(x1 - x0, z1 - z0)
-        out.push({ x: (x0 + x1) / 2, y: (y0 + y1) / 2, z: (z0 + z1) / 2, len: l, heading: Math.atan2(x1 - x0, z1 - z0), pitch: Math.atan2(y1 - y0, l), pier: out.length % 3 === 0 })
-      }
-    }
-    return out
-  }, [])
-  return (
-    <group>
-      {segs.map((s, i) => (
-        <group key={i} position={[s.x, s.y, s.z]} rotation={[0, s.heading, 0]}>
-          <mesh material={MAT.bridge} rotation={[-s.pitch, 0, 0]} castShadow>
-            <boxGeometry args={[9, 2.4, s.len + 0.4]} />
-          </mesh>
-          <mesh material={MAT.bridgeTop} rotation={[-s.pitch, 0, 0]} position={[0, 1.35, 0]}>
-            <boxGeometry args={[9.4, 0.3, s.len + 0.4]} />
-          </mesh>
-          {s.pier && s.y > 5 && (
-            <mesh material={MAT.bridgePier} position={[0, -s.y / 2 - 0.6, 0]} castShadow>
-              <boxGeometry args={[6, s.y, 2.2]} />
-            </mesh>
-          )}
-        </group>
-      ))}
-    </group>
-  )
-}
-
 // ───────── USS Midway (museum carrier at Navy Pier)
 
 function Midway() {
   const select = useUI((s) => s.select)
+  if (!MIDWAY_POSE) return null
   const k = MIDWAY_POSE.length / 150
   return (
     <group position={[MIDWAY_POSE.x, 0, MIDWAY_POSE.z]} rotation={[0, MIDWAY_POSE.heading, 0]} scale={[1, 1, k]} {...clickable(() => select({ type: 'place', id: 'midway' }))}>
@@ -585,10 +528,21 @@ export function World() {
       <LotSurfaces />
       <ParkedCars />
       <Yachts />
-      <Bridge />
-      <Midway />
-      <Statue />
-      <StarOfIndia />
+      <Bridges />
+      {PORT.id === 'san-diego' ? (
+        <>
+          <Midway />
+          <Statue />
+          <StarOfIndia />
+        </>
+      ) : (
+        <>
+          <OtherTerminals />
+          <QueenMary />
+          <CruiseDome />
+          <ThumsIslands />
+        </>
+      )}
       <NightGlow />
     </group>
   )

@@ -35,7 +35,7 @@ const hover = {
   onPointerOut: () => (document.body.style.cursor = ''),
 }
 
-// everything in this file except MovingCars and Wakes lives in the TAMT-local frame
+// everything in this file except MovingCars and Wakes lives in the main terminal's local frame
 
 export function CraneModel({ crane }: { crane: Crane }) {
   const base = useRef<THREE.Group>(null)
@@ -119,6 +119,115 @@ export function CraneModel({ crane }: { crane: Crane }) {
       </group>
       <mesh ref={rope} material={MAT.rope}>
         <cylinderGeometry args={[0.07, 0.07, 1, 4]} />
+      </mesh>
+      <group ref={spreader}>
+        <mesh material={MAT.yellow}>
+          <boxGeometry args={[6.2, 0.4, 1.4]} />
+        </mesh>
+        <mesh material={MAT.dark} position={[0, 0.5, 0]}>
+          <boxGeometry args={[1.2, 0.6, 0.8]} />
+        </mesh>
+      </group>
+    </group>
+  )
+}
+
+// ───────── ship-to-shore gantry crane: the portal rides the quay rails, the trolley runs out along the boom
+
+const STS = { water: -2, land: -17, girder: LAND_Y + 28, back: -34, out: 40 }
+const stsMat = {
+  frame: std({ color: '#d9483b', roughness: 0.5 }),
+  white: std({ color: '#f4f5f8' }),
+  dark: std({ color: '#2d3343' }),
+}
+
+export function StsModel({ crane }: { crane: Crane }) {
+  const portal = useRef<THREE.Group>(null)
+  const trolley = useRef<THREE.Group>(null)
+  const rope = useRef<THREE.Mesh>(null)
+  const spreader = useRef<THREE.Group>(null)
+  const select = useUI((s) => s.select)
+  useFrame(() => {
+    if (!portal.current || !trolley.current || !rope.current || !spreader.current) return
+    const tip = craneTip(crane)
+    portal.current.position.set(tip.x, 0, 0)
+    trolley.current.position.set(0, STS.girder - 0.8, tip.z)
+    const top = crane.hookY + 0.95
+    const len = Math.max(0.1, STS.girder - 1.6 - top)
+    rope.current.position.set(0, top + len / 2, tip.z)
+    rope.current.scale.set(1, len, 1)
+    spreader.current.position.set(0, crane.hookY + 0.85, tip.z)
+  })
+  const legH = STS.girder - LAND_Y
+  const boomLen = STS.out - STS.back
+  return (
+    <group
+      ref={portal}
+      onClick={(e) => {
+        e.stopPropagation()
+        select({ type: 'crane', id: crane.id })
+      }}
+      {...hover}
+    >
+      {/* four legs on the two quay rails, with sill beams and bogies */}
+      {[STS.water, STS.land].map((z) => (
+        <group key={z}>
+          {[-6.5, 6.5].map((x) => (
+            <mesh key={x} material={stsMat.frame} position={[x, LAND_Y + legH / 2, z]} castShadow>
+              <boxGeometry args={[1.1, legH, 1.1]} />
+            </mesh>
+          ))}
+          <mesh material={stsMat.frame} position={[0, LAND_Y + 1.6, z]}>
+            <boxGeometry args={[14, 0.9, 1]} />
+          </mesh>
+          {[-6.5, 6.5].map((x) => (
+            <mesh key={`b${x}`} material={stsMat.dark} position={[x, LAND_Y + 0.5, z]}>
+              <boxGeometry args={[3.2, 1, 1.6]} />
+            </mesh>
+          ))}
+        </group>
+      ))}
+      {/* portal beams across the rails */}
+      {[-6.5, 6.5].map((x) => (
+        <mesh key={x} material={stsMat.frame} position={[x, LAND_Y + legH * 0.55, (STS.water + STS.land) / 2]}>
+          <boxGeometry args={[0.8, 0.8, STS.water - STS.land]} />
+        </mesh>
+      ))}
+      {/* boom and girder, from backreach to outreach */}
+      {[-2.2, 2.2].map((x) => (
+        <mesh key={x} material={stsMat.frame} position={[x, STS.girder, (STS.back + STS.out) / 2]} castShadow>
+          <boxGeometry args={[1, 1.6, boomLen]} />
+        </mesh>
+      ))}
+      <mesh material={stsMat.frame} position={[0, STS.girder + 0.4, (STS.water + STS.land) / 2]}>
+        <boxGeometry args={[14, 1.2, 2]} />
+      </mesh>
+      {/* A-frame apex with forestays */}
+      {[-4, 4].map((x) => (
+        <mesh key={x} material={stsMat.frame} position={[x * 0.6, STS.girder + 7, STS.land + 1]} rotation={[0, 0, (x > 0 ? -1 : 1) * 0.12]}>
+          <boxGeometry args={[0.8, 14, 0.8]} />
+        </mesh>
+      ))}
+      <mesh material={stsMat.dark} position={[0, STS.girder + 7.5, (STS.land + STS.out) / 2 + 3]} rotation={[Math.atan2(13, STS.out - STS.land), 0, 0]}>
+        <boxGeometry args={[0.25, 0.25, Math.hypot(13, STS.out - STS.land) * 0.92]} />
+      </mesh>
+      <mesh material={stsMat.dark} position={[0, STS.girder + 7.5, (STS.land + STS.back) / 2 - 1]} rotation={[-Math.atan2(13, STS.land - STS.back), 0, 0]}>
+        <boxGeometry args={[0.25, 0.25, Math.hypot(13, STS.land - STS.back) * 0.92]} />
+      </mesh>
+      {/* machinery house on the backreach */}
+      <mesh material={stsMat.white} position={[0, STS.girder + 2.2, STS.back + 6]} castShadow>
+        <boxGeometry args={[6.5, 3, 9]} />
+      </mesh>
+      <group ref={trolley}>
+        <mesh material={stsMat.white}>
+          <boxGeometry args={[5.2, 1.4, 3.4]} />
+        </mesh>
+        <mesh material={MAT.glass} position={[1.6, -1.6, 0]}>
+          <boxGeometry args={[1.8, 1.6, 1.8]} />
+        </mesh>
+      </group>
+      <mesh ref={rope} material={MAT.rope}>
+        <cylinderGeometry args={[0.08, 0.08, 1, 4]} />
       </mesh>
       <group ref={spreader}>
         <mesh material={MAT.yellow}>
