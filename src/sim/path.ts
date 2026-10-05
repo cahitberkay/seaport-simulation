@@ -1,4 +1,3 @@
-import { CatmullRomCurve3, Vector3 } from 'three'
 
 export interface Vec {
   x: number
@@ -34,6 +33,38 @@ export function lerpAngle(a: number, b: number, t: number) {
   return a + d * t
 }
 
+/** Polyline with each corner replaced by a quadratic arc – smooth, and it never bulges outside the corner. */
+function filleted(group: Vec[], radius = 90): Vec[] {
+  const out: Vec[] = []
+  const pushLine = (a: Vec, b: Vec) => {
+    const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / SPACING))
+    for (let k = 1; k <= n; k++) out.push({ x: a.x + ((b.x - a.x) * k) / n, z: a.z + ((b.z - a.z) * k) / n })
+  }
+  let cursor = group[0]
+  for (let i = 1; i < group.length - 1; i++) {
+    const A = group[i - 1]
+    const B = group[i]
+    const C = group[i + 1]
+    const ab = Math.hypot(B.x - A.x, B.z - A.z) || 1
+    const bc = Math.hypot(C.x - B.x, C.z - B.z) || 1
+    const t = Math.min(radius, ab / 2, bc / 2)
+    const p1 = { x: B.x - ((B.x - A.x) / ab) * t, z: B.z - ((B.z - A.z) / ab) * t }
+    const p2 = { x: B.x + ((C.x - B.x) / bc) * t, z: B.z + ((C.z - B.z) / bc) * t }
+    pushLine(cursor, p1)
+    const n = Math.max(2, Math.ceil((2 * t) / SPACING))
+    for (let k = 1; k <= n; k++) {
+      const u = k / n
+      out.push({
+        x: (1 - u) * (1 - u) * p1.x + 2 * (1 - u) * u * B.x + u * u * p2.x,
+        z: (1 - u) * (1 - u) * p1.z + 2 * (1 - u) * u * B.z + u * u * p2.z,
+      })
+    }
+    cursor = p2
+  }
+  pushLine(cursor, group[group.length - 1])
+  return out
+}
+
 /**
  * Turn sparse waypoints into a dense, smooth polyline. Consecutive waypoints with the
  * same direction (forward/reverse) form one Catmull-Rom curve; a direction change is a cusp.
@@ -60,13 +91,7 @@ export function buildPath(start: Vec, wps: Waypoint[]): PathPoint[] {
       pts = []
       for (let k = 1; k <= n; k++) pts.push({ x: a.x + ((b.x - a.x) * k) / n, z: a.z + ((b.z - a.z) * k) / n })
     } else {
-      const curve = new CatmullRomCurve3(
-        group.map((p) => new Vector3(p.x, 0, p.z)),
-        false,
-        'centripetal',
-      )
-      const n = Math.max(2, Math.ceil(curve.getLength() / SPACING))
-      pts = curve.getSpacedPoints(n).slice(1).map((v) => ({ x: v.x, z: v.z }))
+      pts = filleted(group)
     }
     // distance-to-cusp for braking
     const seg: PathPoint[] = pts.map((p) => ({ ...p, rev, hold, remain: 0 }))
@@ -98,7 +123,9 @@ export function follow(
   const head = m.path[0]
   const target = Math.min(speedFor(head), 0.6 + head.remain * brake)
   m.speed += (target - m.speed) * (1 - Math.exp(-3 * dt))
-  let remaining = Math.max(m.speed, 0.4) * dt
+  // a zero target (e.g. holding for traffic) lets the mover come to a full stop
+  if (target <= 0.01 && m.speed < 0.05) m.speed = 0
+  let remaining = (target <= 0.01 ? Math.max(0, m.speed) : Math.max(m.speed, 0.4)) * dt
   let desired: number | null = null
   while (remaining > 0 && m.path.length) {
     const wp = m.path[0]

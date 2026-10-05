@@ -115,3 +115,31 @@ export const IconAlert = (p: SVGProps<SVGSVGElement>) => (
 export const IconUsers = (p: SVGProps<SVGSVGElement>) => (
   <svg {...base(p)}><circle cx="9" cy="8" r="3" /><path d="M3 20a6 6 0 0 1 12 0M16 4a3 3 0 0 1 0 6M18 14a5 5 0 0 1 3 6" /></svg>
 )
+
+export const IconSun = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></svg>
+)
+export const IconMoon = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z" /></svg>
+)
+export const IconEye = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></svg>
+)
+export const IconEyeOff = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}><path d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4M6.1 6.1A17 17 0 0 0 2 12s3.5 7 10 7a9.6 9.6 0 0 0 4.4-1" /><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" /></svg>
+)
+export const IconTag = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}><path d="M3 12V3h9l9 9-9 9z" /><circle cx="7.5" cy="7.5" r="1.5" /></svg>
+)
+export const IconBuilding = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}><path d="M4 21V5l8-3v19M12 21h8V9l-8-3" /><path d="M7 8h2M7 12h2M7 16h2M15 12h2M15 16h2" /></svg>
+)
+export const IconYacht = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}><path d="M12 3v13M12 4l7 10h-7M3 17h18l-2 4H5z" /></svg>
+)
+export const IconStatue = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}><circle cx="10" cy="4" r="1.6" /><circle cx="15" cy="5.5" r="1.4" /><path d="M10 6l-1 7 2 4M15 7l-2 5M6 21h12l-1-4H7z" /></svg>
+)
+export const IconPinMap = (p: SVGProps<SVGSVGElement>) => (
+  <svg {...base(p)}><path d="M12 22s7-6.2 7-12a7 7 0 1 0-14 0c0 5.8 7 12 7 12z" /><circle cx="12" cy="10" r="2.5" /></svg>
+)

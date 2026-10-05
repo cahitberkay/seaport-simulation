@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
+import { LIGHT } from './light'
 
 /**
  * Stylised bay water: a flat plane whose normals and colour are perturbed procedurally
@@ -13,6 +14,7 @@ export function Water() {
     const mat = new THREE.MeshStandardMaterial({ color: '#7cc0ea', roughness: 0.32, metalness: 0.05 })
     mat.onBeforeCompile = (shader) => {
       shader.uniforms.uTime = uniforms.uTime
+      shader.uniforms.uNight = LIGHT.night
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', '#include <common>\nvarying vec2 vWaterXZ;')
         .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWaterXZ = (modelMatrix * vec4(position, 1.0)).xz;')
@@ -21,6 +23,7 @@ export function Water() {
           '#include <common>',
           `#include <common>
           uniform float uTime;
+          uniform float uNight;
           varying vec2 vWaterXZ;
           float wv(vec2 p) {
             return sin(p.x * 0.09 + uTime * 0.9) * 0.5
@@ -41,13 +44,13 @@ export function Water() {
           {
             vec2 p = vWaterXZ;
             float n = vnoise(p * 0.004) * 0.6 + vnoise(p * 0.012) * 0.4;
-            vec3 deep = vec3(0.07, 0.30, 0.62);
-            vec3 shallow = vec3(0.20, 0.52, 0.80);
-            float shore = max(smoothstep(70.0, 0.0, p.y), smoothstep(620.0, 760.0, p.y));
-            diffuseColor.rgb = mix(deep, shallow, clamp(n * 0.55 + shore * 0.6, 0.0, 1.0));
+            vec3 deep = vec3(0.04, 0.24, 0.55);
+            vec3 shallow = vec3(0.13, 0.43, 0.74);
+            diffuseColor.rgb = mix(deep, shallow, clamp(n * 0.7, 0.0, 1.0));
+            diffuseColor.rgb *= mix(1.0, 0.32, uNight);
             float streak = sin(p.x * 0.035 + sin(p.y * 0.021 + uTime * 0.25) * 2.4 + uTime * 0.35);
             float s2 = vnoise(p * 0.03 + vec2(uTime * 0.05, 0.0));
-            diffuseColor.rgb += vec3(0.22) * smoothstep(0.9, 1.0, streak) * smoothstep(0.45, 0.8, s2);
+            diffuseColor.rgb += vec3(0.07) * smoothstep(0.93, 1.0, streak) * smoothstep(0.55, 0.85, s2) * (1.0 - uNight);
           }`,
         )
         .replace(
@@ -72,7 +75,7 @@ export function Water() {
 
   return (
     <mesh material={mat} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
-      <planeGeometry args={[12000, 12000]} />
+      <planeGeometry args={[60000, 60000]} />
     </mesh>
   )
 }

@@ -1,22 +1,26 @@
 import Scene from './three/Scene'
-import { TopBar, Kpis, CamToolbar, SidePanel, BottomDock } from './ui/Hud'
+import { TopBar, LeftColumn, RightColumn, MapToolbar, BottomDock, JourneyStrip } from './ui/Hud'
+import { useUI } from './store'
 
 export default function App() {
+  const showPanels = useUI((s) => s.showPanels)
+  const night = useUI((s) => s.night)
   return (
-    <div className="app">
+    <div className={`app ${night ? 'is-night' : ''}`}>
       <div className="viewport">
         <Scene />
       </div>
       <TopBar />
       <div className="hud">
         <div className="hud-top">
-          <Kpis />
+          {showPanels && <LeftColumn />}
           <div className="right-col">
-            <CamToolbar />
-            <SidePanel />
+            <MapToolbar />
+            {showPanels && <RightColumn />}
           </div>
         </div>
-        <BottomDock />
+        <JourneyStrip />
+        {showPanels && <BottomDock />}
       </div>
     </div>
   )

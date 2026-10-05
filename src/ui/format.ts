@@ -8,12 +8,17 @@ export function shipStatus(s: Ship): { label: string; tone: Tone; pct?: number }
   const pct = Math.round(shipProgress(s) * 100)
   switch (s.state) {
     case 'inbound':
-      return s.anchorIdx !== undefined ? { label: 'To anchorage', tone: 'amber' } : { label: 'Arriving', tone: 'blue' }
+      if (s.anchorIdx !== undefined) return { label: 'To anchorage', tone: 'amber' }
+      return s.speedCap === 0 ? { label: 'Holding · traffic', tone: 'amber' } : { label: 'Arriving', tone: 'blue' }
+    case 'waiting':
+      return { label: 'Holding · basin busy', tone: 'amber' }
     case 'anchored':
       return { label: 'At anchor', tone: 'amber' }
+    case 'approach':
     case 'berthing':
       return { label: 'Berthing', tone: 'blue' }
     case 'working': {
+      if (s.navy) return { label: 'In port', tone: 'grey' }
       if (s.kind === 'container' || s.kind === 'feeder')
         return s.toDischarge.size ? { label: 'Discharging', tone: 'orange', pct } : { label: 'Loading', tone: 'green', pct }
       if (s.kind === 'carcarrier') return { label: 'Discharging vehicles', tone: 'orange', pct }
@@ -22,7 +27,7 @@ export function shipStatus(s: Ship): { label: string; tone: Tone; pct?: number }
       return { label: 'Turnaround', tone: 'green', pct }
     }
     case 'ready':
-      return { label: 'Cargo complete', tone: 'green', pct: 100 }
+      return s.navy ? { label: 'Preparing to sail', tone: 'blue' } : { label: 'Cargo complete', tone: 'green', pct: 100 }
     case 'unberthing':
       return { label: 'Unberthing', tone: 'blue' }
     default:

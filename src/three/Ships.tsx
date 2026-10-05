@@ -371,17 +371,152 @@ function CruiseShip({ ship }: { ship: Ship }) {
   )
 }
 
+// ───────── U.S. Navy ships (haze grey)
+
+const NAVY = {
+  hull: std({ color: '#8c95a8', roughness: 0.6 }),
+  deck: std({ color: '#5f6879', roughness: 0.8 }),
+  light: std({ color: '#a7afbf', roughness: 0.55 }),
+  dark: std({ color: '#3b4252' }),
+  stripe: std({ color: '#f2f2f2' }),
+}
+
+function Aircraft({ x, z, r = 0 }: { x: number; z: number; r?: number }) {
+  return (
+    <group position={[x, 0, z]} rotation={[0, r, 0]}>
+      <mesh material={NAVY.light} castShadow>
+        <boxGeometry args={[1.1, 0.6, 7]} />
+      </mesh>
+      <mesh material={NAVY.light} position={[0, 0.1, 0.6]}>
+        <boxGeometry args={[6.5, 0.18, 1.8]} />
+      </mesh>
+      <mesh material={NAVY.light} position={[0, 0.6, -3]}>
+        <boxGeometry args={[0.2, 1.4, 1.2]} />
+      </mesh>
+    </group>
+  )
+}
+
+function Warship({ ship }: { ship: Ship }) {
+  const L = ship.cls.length
+  const B = ship.cls.beam
+  const f = ship.cls.freeboard
+  if (ship.kind === 'carrier' || ship.kind === 'amphib') {
+    const carrier = ship.kind === 'carrier'
+    const deckW = carrier ? B * 1.9 : B * 1.3
+    return (
+      <group>
+        <mesh geometry={hullGeo(L, B, -3, 0.6, 1.4)} material={[MAT.red, MAT.red]} />
+        <mesh geometry={hullGeo(L, B, 0.6, f, 1.4)} material={[NAVY.deck, NAVY.hull]} castShadow receiveShadow />
+        <mesh material={NAVY.deck} position={[carrier ? -2 : 0, f + 0.4, 2]} castShadow receiveShadow>
+          <boxGeometry args={[deckW, 0.8, L * 1.02]} />
+        </mesh>
+        {carrier && (
+          <mesh material={NAVY.deck} position={[-B * 0.55, f + 0.41, -L * 0.12]} rotation={[0, -0.16, 0]}>
+            <boxGeometry args={[B * 0.9, 0.8, L * 0.55]} />
+          </mesh>
+        )}
+        <mesh material={NAVY.stripe} position={[carrier ? -2 : 0, f + 0.82, 2]}>
+          <boxGeometry args={[0.35, 0.02, L * 0.95]} />
+        </mesh>
+        <group position={[deckW / 2 - 4, f + 0.8, carrier ? L * 0.05 : -L * 0.05]}>
+          <mesh material={NAVY.hull} position={[0, 5, 0]} castShadow>
+            <boxGeometry args={[4, 10, carrier ? 16 : 20]} />
+          </mesh>
+          <mesh material={NAVY.dark} position={[0, 8.5, 2]}>
+            <boxGeometry args={[4.1, 1, 6]} />
+          </mesh>
+          <mesh material={NAVY.light} position={[0, 13, 0]}>
+            <boxGeometry args={[0.6, 6, 0.6]} />
+          </mesh>
+          {carrier && (
+            <mesh material={NAVY.stripe} position={[2.06, 6, 0]} rotation={[0, Math.PI / 2, 0]}>
+              <planeGeometry args={[6, 3]} />
+            </mesh>
+          )}
+        </group>
+        {Array.from({ length: carrier ? 16 : 8 }, (_, i) => (
+          <Aircraft key={i} x={carrier ? (i % 2 ? -10 : -4) - 2 : i % 2 ? -6 : -2} z={-L / 2 + 14 + i * (carrier ? 9 : 13)} r={carrier ? 0.5 : 0} />
+        )).map((a, i) => (
+          <group key={i} position={[0, f + 1.1, 0]}>
+            {a}
+          </group>
+        ))}
+      </group>
+    )
+  }
+  // surface combatants: destroyer / cruiser
+  const cruiser = ship.kind === 'cruiser'
+  return (
+    <group>
+      <mesh geometry={hullGeo(L, B, -3, 0.6, 2.4)} material={[MAT.red, MAT.red]} />
+      <mesh geometry={hullGeo(L, B, 0.6, f, 2.4)} material={[NAVY.deck, NAVY.hull]} castShadow receiveShadow />
+      {/* bow gun and VLS */}
+      <group position={[0, f, L * 0.3]}>
+        <mesh material={NAVY.light} position={[0, 0.7, 0]} castShadow>
+          <cylinderGeometry args={[1.1, 1.3, 1.4, 10]} />
+        </mesh>
+        <mesh material={NAVY.dark} position={[0, 0.9, 3]} rotation={[Math.PI / 2, 0, 0]}>
+          <cylinderGeometry args={[0.15, 0.2, 5, 6]} />
+        </mesh>
+      </group>
+      <mesh material={NAVY.dark} position={[0, f + 0.15, L * 0.18]}>
+        <boxGeometry args={[B * 0.5, 0.3, 6]} />
+      </mesh>
+      {/* superstructure with angled sides and the mast */}
+      <group position={[0, f, L * 0.06]}>
+        <mesh material={NAVY.hull} position={[0, 2.6, 0]} castShadow>
+          <boxGeometry args={[B * 0.78, 5.2, 14]} />
+        </mesh>
+        <mesh material={NAVY.light} position={[0, 6.2, 1]} castShadow>
+          <boxGeometry args={[B * 0.6, 2.2, 8]} />
+        </mesh>
+        <mesh material={NAVY.dark} position={[0, 6.7, 5.05]}>
+          <boxGeometry args={[B * 0.55, 0.8, 0.1]} />
+        </mesh>
+        <mesh material={NAVY.light} position={[0, 11, -1]} castShadow>
+          <cylinderGeometry args={[0.4, 0.8, 7, 6]} />
+        </mesh>
+        <mesh material={NAVY.light} position={[0, 13.5, -1]}>
+          <boxGeometry args={[5, 0.3, 0.3]} />
+        </mesh>
+      </group>
+      {cruiser && (
+        <mesh material={NAVY.hull} position={[0, f + 2.6, -L * 0.18]} castShadow>
+          <boxGeometry args={[B * 0.7, 5.2, 12]} />
+        </mesh>
+      )}
+      {/* funnels and helicopter deck */}
+      <mesh material={NAVY.hull} position={[0, f + 4, -L * 0.05]} castShadow>
+        <boxGeometry args={[B * 0.4, 6, 4]} />
+      </mesh>
+      <mesh material={NAVY.stripe} position={[0, f + 0.05, -L * 0.4]} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[2.2, 2.5, 24]} />
+      </mesh>
+      <mesh material={NAVY.stripe} position={[B / 2 + 0.03, f - 1.2, L * 0.36]} rotation={[0, Math.PI / 2, 0]}>
+        <planeGeometry args={[3.6, 1.6]} />
+      </mesh>
+    </group>
+  )
+}
+
 // ───────── ship root
 
 function ShipLabel({ ship }: { ship: Ship }) {
   useUI((s) => s.tick)
   const st = shipStatus(ship)
-  const tall = ship.kind === 'cruise' ? 30 : ship.kind === 'carcarrier' ? 24 : 22
+  const showLabels = useUI((s) => s.showLabels)
+  const sel = useUI((s) => s.selected)
+  // ships quietly in port (navy alongside, anchored) only get a label when selected
+  const quiet = (ship.navy && ship.state === 'working') || ship.static
+  if (!showLabels || (quiet && !(sel?.type === 'ship' && sel.id === ship.id))) return null
+  const tall = ship.kind === 'cruise' ? 30 : ship.kind === 'carcarrier' || ship.kind === 'carrier' || ship.kind === 'amphib' ? 30 : 22
   return (
-    <Html position={[0, tall, 0]} center zIndexRange={[15, 0]} style={{ pointerEvents: 'none' }}>
+    <Html position={[0, tall, 0]} center zIndexRange={[8, 0]} style={{ pointerEvents: 'none' }}>
       <div className="tag">
         <span className={`tag-dot dot-${st.tone}`} />
         <b>{ship.name.toUpperCase()}</b>
+        {ship.navy && <span className="tag-hull">{ship.navy.hull}</span>}
         <span>
           {st.label}
           {st.pct !== undefined ? ` ${st.pct}%` : ''}
@@ -411,15 +546,17 @@ export function ShipModel({ ship }: { ship: Ship }) {
       <BulkCarrier ship={ship} />
     ) : ship.kind === 'multipurpose' ? (
       <MultipurposeShip ship={ship} />
-    ) : (
+    ) : ship.kind === 'cruise' ? (
       <CruiseShip ship={ship} />
+    ) : (
+      <Warship ship={ship} />
     )
   return (
     <group
       ref={group}
       onClick={(e) => {
         e.stopPropagation()
-        select({ type: 'ship', id: ship.id }, ship.state !== 'working' && ship.state !== 'anchored')
+        select({ type: 'ship', id: ship.id }, !['working', 'anchored', 'waiting'].includes(ship.state))
       }}
       onPointerOver={(e) => {
         e.stopPropagation()

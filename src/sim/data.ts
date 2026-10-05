@@ -20,6 +20,12 @@ export function fmtTime(min: number) {
   const d = new Date(BASE + m * 60000)
   return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`
 }
+export function fmtClock(min: number) {
+  const ms = Math.floor(min * 60000)
+  const d = new Date(BASE + ms)
+  const p = (v: number) => String(v).padStart(2, '0')
+  return `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`
+}
 export function fmtDate(min: number) {
   const d = new Date(BASE + Math.floor(min) * 60000)
   return `${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()} · ${fmtTime(min)}`
@@ -55,8 +61,13 @@ const NAME_PARTS: Record<ShipKind, [string[], string[]]> = {
   carcarrier: [['Auto', 'Grand', 'Harbor', 'Sunrise', 'Cielo', 'Pacific', 'Seabright'], ['Meridian', 'Pasifico', 'Pioneer', 'Carrier', 'Drive', 'Motorway', 'Voyager']],
   bulk: [['Mesa', 'Iron', 'Golden', 'Torrey', 'Copper'], ['Verde', 'Pelican', 'Sierra', 'Pine', 'Canyon']],
   multipurpose: [['Tradewind', 'Nordic', 'Santa Ana', 'Pacific'], ['Lift', 'Breeze', 'Wind', 'Heavy']],
-  cruise: [['Pacific', 'Riviera', 'Ocean', 'Coral'], ['Serenade', 'Dawn', 'Aurora', 'Harmony']],
+  cruise: [['Pacific', 'Riviera', 'Ocean', 'Coral', 'Sapphire', 'Emerald', 'Golden'], ['Serenade', 'Dawn', 'Aurora', 'Harmony', 'Odyssey', 'Voyager', 'Princess']],
+  destroyer: [['USS Harbor', 'USS Pacific', 'USS Coronado', 'USS Cabrillo', 'USS Mesa', 'USS Point'], ['Sentinel', 'Resolve', 'Vigil', 'Guardian', 'Valor', 'Loma']],
+  cruiser: [['USS Lake', 'USS Cape', 'USS Fort'], ['Rosecrans', 'Palomar', 'Laguna', 'Cuyamaca']],
+  amphib: [['USS'], ['Silver Strand', 'Torrey Pines', 'Mission Bay']],
+  carrier: [['USS'], ['Pacific Resolve']],
 }
+export const HULL_PREFIX: Partial<Record<ShipKind, string>> = { destroyer: 'DDG', cruiser: 'CG', amphib: 'LHD', carrier: 'CVN' }
 const used = new Set<string>()
 export function shipName(kind: ShipKind) {
   const [a, b] = NAME_PARTS[kind]
@@ -133,7 +144,14 @@ const SERVICES: Record<ShipKind, { service: string; prev: string[]; next: string
   ],
   bulk: [{ service: 'Tramp · Bulk', prev: ['PECLL', 'MXLZC', 'CNSHA'], next: ['ECGYE', 'PECLL'] }],
   multipurpose: [{ service: 'Project Cargo · Wind', prev: ['CNSHA', 'KRPUS'], next: ['USLGB', 'MXZLO'] }],
-  cruise: [{ service: 'Mexican Riviera', prev: ['MXCSL', 'MXPVR', 'MXENS'], next: ['MXCSL', 'MXPVR', 'MXENS'] }],
+  cruise: [
+    { service: 'Mexican Riviera', prev: ['MXCSL', 'MXPVR', 'MXENS'], next: ['MXCSL', 'MXPVR', 'MXENS'] },
+    { service: 'Pacific Coastal', prev: ['USSFO', 'CAVIC', 'CAVAN'], next: ['MXENS', 'MXCSL', 'USHNL'] },
+  ],
+  destroyer: [{ service: 'Pacific Fleet · underway training', prev: ['USHNL', 'USSAN'], next: ['USHNL', 'USSAN'] }],
+  cruiser: [{ service: 'Pacific Fleet · underway training', prev: ['USHNL'], next: ['USHNL'] }],
+  amphib: [{ service: 'Expeditionary strike group', prev: ['USHNL'], next: ['USHNL'] }],
+  carrier: [{ service: 'Carrier strike group', prev: ['USHNL'], next: ['USHNL'] }],
 }
 
 export function voyageFor(kind: ShipKind): Voyage {

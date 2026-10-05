@@ -3,9 +3,9 @@ import { useFrame } from '@react-three/fiber'
 import type { ThreeEvent } from '@react-three/fiber'
 import { RoundedBox } from '@react-three/drei'
 import * as THREE from 'three'
-import { sim, craneTip, transferPos, yardWorld, containerById, handlerById, craneById, toWorld, BOOM } from '../sim/sim'
-import type { Crane, Handler, Container } from '../sim/sim'
-import { LAND_Y, CRANE_Z, CONTAINER } from '../sim/world'
+import { sim, craneTip, transferPos, yardLocal, containerById, handlerById, craneById, rtgById, toWorld, BOOM, RTG_SAFE } from '../sim/sim'
+import type { Crane, Handler, Container, Rtg } from '../sim/sim'
+import { LAND_Y, CRANE_Z, CONTAINER, rowZ, FRONT_OFFSET } from '../sim/world'
 import { useUI } from '../store'
 import { containerMat } from './Ships'
 import { foamDot } from './textures'
@@ -25,7 +25,7 @@ const MAT = {
 }
 
 const PIVOT = LAND_Y + 16.5
-const yardGeo = new THREE.BoxGeometry(CONTAINER.len, CONTAINER.hgt, CONTAINER.wid)
+export const yardGeo = new THREE.BoxGeometry(CONTAINER.len, CONTAINER.hgt, CONTAINER.wid)
 
 const hover = {
   onPointerOver: (e: ThreeEvent<PointerEvent>) => {
@@ -35,7 +35,7 @@ const hover = {
   onPointerOut: () => (document.body.style.cursor = ''),
 }
 
-// ───────── mobile harbour crane
+// everything in this file except MovingCars and Wakes lives in the TAMT-local frame
 
 export function CraneModel({ crane }: { crane: Crane }) {
   const base = useRef<THREE.Group>(null)
@@ -48,8 +48,7 @@ export function CraneModel({ crane }: { crane: Crane }) {
     if (!base.current || !upper.current || !boom.current || !rope.current || !spreader.current) return
     base.current.position.set(crane.x, LAND_Y, CRANE_Z)
     upper.current.rotation.y = crane.slew
-    const r = Math.min(BOOM - 0.01, crane.radius)
-    const elev = Math.acos(r / BOOM)
+    const elev = Math.acos(Math.min(BOOM - 0.01, crane.radius) / BOOM)
     boom.current.rotation.x = -elev
     const tip = craneTip(crane)
     const tipY = PIVOT + Math.sin(elev) * BOOM
@@ -59,14 +58,16 @@ export function CraneModel({ crane }: { crane: Crane }) {
     rope.current.scale.set(1, len, 1)
     spreader.current.position.set(tip.x, crane.hookY + 0.85, tip.z)
   })
-  const onClick = (e: ThreeEvent<MouseEvent>) => {
-    e.stopPropagation()
-    select({ type: 'crane', id: crane.id })
-  }
   return (
     <group>
-      <group ref={base} onClick={onClick} {...hover}>
-        {/* carrier with outriggers */}
+      <group
+        ref={base}
+        onClick={(e) => {
+          e.stopPropagation()
+          select({ type: 'crane', id: crane.id })
+        }}
+        {...hover}
+      >
         <RoundedBox args={[10, 2.4, 7]} radius={0.3} smoothness={2} position={[0, 1.9, 0]} material={MAT.white} castShadow />
         <mesh material={MAT.blue} position={[0, 1.2, 3.52]}>
           <boxGeometry args={[10, 0.5, 0.05]} />
@@ -82,7 +83,7 @@ export function CraneModel({ crane }: { crane: Crane }) {
           [-1, -1], [1, -1], [-1, 1], [1, 1],
         ].map(([sx, sz], i) => (
           <group key={i}>
-            <mesh material={MAT.blue} position={[sx * 6, 1.4, sz * 5]} rotation={[0, Math.atan2(sx * 1, sz * 0.9), 0]} castShadow>
+            <mesh material={MAT.blue} position={[sx * 6, 1.4, sz * 5]} rotation={[0, Math.atan2(sx, sz * 0.9), 0]} castShadow>
               <boxGeometry args={[0.7, 0.6, 5]} />
             </mesh>
             <mesh material={MAT.dark} position={[sx * 7.4, 0.2, sz * 6.2]}>
@@ -90,11 +91,10 @@ export function CraneModel({ crane }: { crane: Crane }) {
             </mesh>
           </group>
         ))}
-        {/* tower */}
         <mesh material={MAT.blue} position={[0, 9, 0]} castShadow>
           <boxGeometry args={[2.6, 13.5, 2.6]} />
         </mesh>
-        <group ref={upper} position={[0, 0, 0]}>
+        <group ref={upper}>
           <mesh material={MAT.white} position={[0, PIVOT - LAND_Y + 1.2, -2.6]} castShadow>
             <boxGeometry args={[4.6, 3.6, 7]} />
           </mesh>
@@ -131,6 +131,81 @@ export function CraneModel({ crane }: { crane: Crane }) {
     </group>
   )
 }
+
+// ───────── RTG (yard gantry crane): straddles rows 1–2, drives along the block, trolley across
+
+const RTG_Z0 = rowZ(2) - FRONT_OFFSET - 3 * 1.36 - 1.1
+const RTG_Z1 = rowZ(1) + FRONT_OFFSET + 0.9
+const RTG_H = 9.5
+
+export function RtgModel({ g }: { g: Rtg }) {
+  const body = useRef<THREE.Group>(null)
+  const trolley = useRef<THREE.Group>(null)
+  const rope = useRef<THREE.Mesh>(null)
+  const spreader = useRef<THREE.Group>(null)
+  const select = useUI((s) => s.select)
+  const span = RTG_Z1 - RTG_Z0
+  useFrame(() => {
+    if (!body.current || !trolley.current || !rope.current || !spreader.current) return
+    body.current.position.set(g.x, LAND_Y, 0)
+    trolley.current.position.set(0, RTG_H, g.trolleyZ)
+    const top = g.hookY + 0.95
+    const len = Math.max(0.1, LAND_Y + RTG_H - 0.6 - top)
+    rope.current.position.set(0, top + len / 2 - LAND_Y, g.trolleyZ)
+    rope.current.scale.set(1, len, 1)
+    spreader.current.position.set(0, g.hookY + 0.85 - LAND_Y, g.trolleyZ)
+  })
+  return (
+    <group
+      ref={body}
+      onClick={(e) => {
+        e.stopPropagation()
+        select({ type: 'rtg', id: g.id })
+      }}
+      {...hover}
+    >
+      {[RTG_Z0, RTG_Z1].map((z) => (
+        <group key={z} position={[0, 0, z]}>
+          {[-3.6, 3.6].map((x) => (
+            <mesh key={x} material={MAT.yellow} position={[x, RTG_H / 2, 0]} castShadow>
+              <boxGeometry args={[0.6, RTG_H, 0.6]} />
+            </mesh>
+          ))}
+          <mesh material={MAT.yellow} position={[0, 1.1, 0]}>
+            <boxGeometry args={[8, 0.6, 0.9]} />
+          </mesh>
+          {[-3.2, 3.2].map((x) => (
+            <mesh key={x} material={MAT.tire} position={[x, 0.5, 0]} rotation={[0, 0, Math.PI / 2]}>
+              <cylinderGeometry args={[0.5, 0.5, 0.5, 10]} />
+            </mesh>
+          ))}
+        </group>
+      ))}
+      {[-3.6, 3.6].map((x) => (
+        <mesh key={x} material={MAT.yellow} position={[x, RTG_H + 0.3, (RTG_Z0 + RTG_Z1) / 2]} castShadow>
+          <boxGeometry args={[0.7, 0.9, span + 0.6]} />
+        </mesh>
+      ))}
+      <group ref={trolley}>
+        <mesh material={MAT.white} position={[0, 0.6, 0]} castShadow>
+          <boxGeometry args={[8, 1.1, 2.4]} />
+        </mesh>
+        <mesh material={MAT.glass} position={[3.2, -0.6, 1]}>
+          <boxGeometry args={[1.2, 1.2, 1.2]} />
+        </mesh>
+      </group>
+      <mesh ref={rope} material={MAT.rope}>
+        <cylinderGeometry args={[0.06, 0.06, 1, 4]} />
+      </mesh>
+      <group ref={spreader}>
+        <mesh material={MAT.yellow}>
+          <boxGeometry args={[6.2, 0.35, 1.3]} />
+        </mesh>
+      </group>
+    </group>
+  )
+}
+export { RTG_SAFE }
 
 // ───────── container forklift (laden top-loader)
 
@@ -190,10 +265,10 @@ export function HandlerModel({ h }: { h: Handler }) {
   )
 }
 
-// ───────── containers that are moving or parked on the apron
+// ───────── containers in motion or parked on the apron
 
 const colorMats = new Map<string, THREE.MeshStandardMaterial>()
-const boxMat = (c: string) => {
+export const boxMat = (c: string) => {
   if (!colorMats.has(c)) {
     const m = containerMat.clone()
     m.color.set(c)
@@ -219,6 +294,10 @@ function LooseContainer({ c }: { c: Container }) {
       const w = toWorld(h, 0, 3.4)
       m.position.set(w.x, h.lift, w.z)
       m.rotation.set(0, h.heading, 0)
+    } else if (loc.kind === 'rtg') {
+      const g = rtgById(loc.id)!
+      m.position.set(g.x, g.hookY, g.trolleyZ)
+      m.rotation.set(0, 0, 0)
     } else if (loc.kind === 'transfer') {
       const p = transferPos(craneById(loc.craneId)!, loc.idx)
       m.position.set(p.x, p.y, p.z)
@@ -248,6 +327,7 @@ export function LooseContainers() {
     for (const t of c.transfer) if (t.cid) ids.add(t.cid)
   }
   for (const h of sim.handlers) if (h.carrying) ids.add(h.carrying)
+  for (const g of sim.rtgs) if (g.carrying) ids.add(g.carrying)
   return (
     <>
       {[...ids].map((id) => {
@@ -257,8 +337,6 @@ export function LooseContainers() {
     </>
   )
 }
-
-// ───────── yard stacks (instanced, clickable)
 
 export function YardContainers() {
   const ref = useRef<THREE.InstancedMesh>(null)
@@ -272,7 +350,7 @@ export function YardContainers() {
     ver.current = sim.yardVersion
     for (let i = 0; i < n; i++) {
       const id = sim.yard[i]
-      const p = yardWorld(i)
+      const p = yardLocal(i)
       tmp.m.compose(new THREE.Vector3(p.x, p.y, p.z), tmp.q, id ? tmp.one : tmp.zero)
       mesh.setMatrixAt(i, tmp.m)
       const c = containerById(id ?? undefined)
@@ -297,57 +375,39 @@ export function YardContainers() {
   )
 }
 
-// ───────── NCMT vehicles
-
-const CAR_COLORS = ['#f4f5f8', '#c9ced8', '#2d3343', '#d94a3d', '#2f6bed', '#8b93a7'].map((c) => new THREE.Color(c))
-const carBody = new THREE.BoxGeometry(1.0, 0.55, 2.2)
-const carCab = new THREE.BoxGeometry(0.88, 0.45, 1.15)
-const carMat = std({ color: '#ffffff', roughness: 0.4 })
-const cabMat = std({ color: '#2a3550', roughness: 0.3 })
-
-const LOT_SLOTS: [number, number][] = (() => {
-  const out: [number, number][] = []
-  for (let k = 0; k < 10; k++)
-    for (const off of [-4.5, -12.5])
-      for (let x = 892; x < 1458; x += 2.4) {
-        if (Math.abs(x - 1175) < 6) continue
-        out.push([x, -40 - k * 17 + off])
-      }
-  return out
-})()
-
-export function CarLot() {
-  const body = useRef<THREE.InstancedMesh>(null)
-  const cab = useRef<THREE.InstancedMesh>(null)
-  const shown = useRef(-1)
-  const n = Math.min(sim.lot.cap, LOT_SLOTS.length)
-  const tmp = useMemo(() => ({ m: new THREE.Matrix4(), q: new THREE.Quaternion() }), [])
-  useFrame(() => {
-    if (!body.current || !cab.current) return
-    const want = Math.min(n, Math.round(sim.lot.count))
-    if (want === shown.current) return
-    const first = shown.current < 0
-    shown.current = want
-    for (let i = 0; i < n; i++) {
-      const [x, z] = LOT_SLOTS[i]
-      const s = i < want ? 1 : 0
-      tmp.m.compose(new THREE.Vector3(x, LAND_Y + 0.45, z), tmp.q, new THREE.Vector3(s, s, s))
-      body.current.setMatrixAt(i, tmp.m)
-      tmp.m.compose(new THREE.Vector3(x, LAND_Y + 0.95, z - 0.1), tmp.q, new THREE.Vector3(s, s, s))
-      cab.current.setMatrixAt(i, tmp.m)
-      if (first) body.current.setColorAt(i, CAR_COLORS[(i * 7 + (i >> 3)) % CAR_COLORS.length])
-    }
-    body.current.instanceMatrix.needsUpdate = true
-    cab.current.instanceMatrix.needsUpdate = true
-    if (body.current.instanceColor) body.current.instanceColor.needsUpdate = true
-  })
+// wind blades laid down on the TAMT apron next to berth 1
+const bladeGeo = new THREE.CylinderGeometry(0.12, 1.0, 34, 10).rotateZ(Math.PI / 2)
+export function Laydown() {
+  const g = useRef<THREE.Group>(null)
+  useFrame(() => g.current?.children.forEach((c, i) => (c.visible = i < sim.laydown)))
   return (
-    <group>
-      <instancedMesh ref={body} args={[carBody, carMat, n]} castShadow />
-      <instancedMesh ref={cab} args={[carCab, cabMat, n]} />
+    <group ref={g}>
+      {Array.from({ length: 12 }, (_, i) => {
+        const col = Math.floor(i / 4)
+        const row = i % 4
+        return (
+          <group key={i} position={[-168 + col * 37, LAND_Y + 1.3, -7 - row * 4.4]} rotation={[0, i % 2 ? Math.PI : 0, 0]}>
+            <mesh geometry={bladeGeo} material={MAT.blade} castShadow />
+            <mesh material={MAT.support} position={[-10, -0.8, 0]}>
+              <boxGeometry args={[0.8, 1, 2.6]} />
+            </mesh>
+            <mesh material={MAT.support} position={[9, -0.8, 0]}>
+              <boxGeometry args={[0.8, 1, 2.6]} />
+            </mesh>
+          </group>
+        )
+      })}
     </group>
   )
 }
+
+// ───────── world-frame: vehicles rolling off car carriers at NCMT
+
+const CAR_COLORS = ['#f4f5f8', '#c9ced8', '#2d3343', '#d94a3d', '#2f6bed', '#8b93a7'].map((c) => new THREE.Color(c))
+const carBody = new THREE.BoxGeometry(0.95, 0.55, 2.2)
+const carCab = new THREE.BoxGeometry(0.85, 0.42, 1.15)
+const carMat = std({ color: '#ffffff', roughness: 0.4 })
+const cabMat = std({ color: '#2a3550', roughness: 0.3 })
 
 export function MovingCars() {
   const body = useRef<THREE.InstancedMesh>(null)
@@ -360,12 +420,10 @@ export function MovingCars() {
       const car = sim.cars[i]
       if (car) {
         tmp.q.setFromEuler(tmp.e.set(0, car.heading, 0))
-        const y = car.pos.z > -2 ? LAND_Y + 0.9 : LAND_Y + 0.45
-        tmp.m.compose(new THREE.Vector3(car.pos.x, y, car.pos.z), tmp.q, tmp.one)
+        tmp.m.compose(new THREE.Vector3(car.pos.x, LAND_Y + 0.45, car.pos.z), tmp.q, tmp.one)
         body.current.setMatrixAt(i, tmp.m)
         body.current.setColorAt(i, CAR_COLORS[car.color])
-        const w = toWorld(car, 0, -0.1)
-        tmp.m.compose(new THREE.Vector3(w.x, y + 0.5, w.z), tmp.q, tmp.one)
+        tmp.m.compose(new THREE.Vector3(car.pos.x, LAND_Y + 0.95, car.pos.z), tmp.q, tmp.one)
         cab.current.setMatrixAt(i, tmp.m)
       } else {
         tmp.m.compose(tmp.zero, tmp.q, tmp.zero)
@@ -385,99 +443,22 @@ export function MovingCars() {
   )
 }
 
-// ───────── wind blades laid down on the TAMT apron
+// ───────── world-frame: wakes behind moving ships and tugs
 
-const bladeGeo = new THREE.CylinderGeometry(0.12, 1.0, 34, 10).rotateZ(Math.PI / 2)
-export function Laydown() {
-  const g = useRef<THREE.Group>(null)
-  useFrame(() => g.current?.children.forEach((c, i) => (c.visible = i < sim.laydown)))
-  return (
-    <group ref={g}>
-      {Array.from({ length: 20 }, (_, i) => {
-        const col = Math.floor(i / 5)
-        const row = i % 5
-        return (
-          <group key={i} position={[-312 + col * 38, LAND_Y + 1.3, -8 - row * 4.4]} rotation={[0, i % 2 ? Math.PI : 0, 0]}>
-            <mesh geometry={bladeGeo} material={MAT.blade} castShadow />
-            <mesh material={MAT.support} position={[-10, -0.8, 0]}>
-              <boxGeometry args={[0.8, 1, 2.6]} />
-            </mesh>
-            <mesh material={MAT.support} position={[9, -0.8, 0]}>
-              <boxGeometry args={[0.8, 1, 2.6]} />
-            </mesh>
-          </group>
-        )
-      })}
-    </group>
-  )
-}
-
-// ───────── drayage trucks on Harbor Drive (ambient traffic)
-
-export function Traffic() {
-  const ref = useRef<THREE.Group>(null)
-  const trucks = useMemo(
-    () =>
-      Array.from({ length: 16 }, (_, i) => ({
-        x: -1500 + i * 230 + Math.random() * 80,
-        lane: i % 2 ? 1 : -1,
-        speed: 14 + Math.random() * 6,
-        color: ['#2f6bed', '#13a39a', '#f08a0b', '#1e3a8a', '#e0533d', '#eef1f7'][i % 6],
-      })),
-    [],
-  )
-  useFrame((_, dt) => {
-    ref.current?.children.forEach((c, i) => {
-      const t = trucks[i]
-      t.x += t.lane * t.speed * Math.min(dt, 0.1) * sim.speed
-      if (t.x > 3200) t.x = -1700
-      if (t.x < -1700) t.x = 3200
-      c.position.set(t.x, LAND_Y, -232 + t.lane * 3)
-      c.rotation.y = t.lane > 0 ? Math.PI / 2 : -Math.PI / 2
-    })
-  })
-  return (
-    <group ref={ref}>
-      {trucks.map((t, i) => (
-        <group key={i}>
-          <mesh material={MAT.white} position={[0, 1.4, 3.6]} castShadow>
-            <boxGeometry args={[2.2, 2.2, 2]} />
-          </mesh>
-          <mesh material={MAT.dark} position={[0, 0.7, 0]}>
-            <boxGeometry args={[2, 0.5, 9]} />
-          </mesh>
-          <mesh geometry={yardGeo} material={boxMat(t.color)} position={[0, 1.7, -0.6]} rotation={[0, Math.PI / 2, 0]} castShadow />
-        </group>
-      ))}
-    </group>
-  )
-}
-
-// ───────── wakes
-
-const WAKE_N = 1400
+const WAKE_N = 1600
 export function Wakes() {
   const ref = useRef<THREE.InstancedMesh>(null)
-  const parts = useMemo(
-    () => Array.from({ length: WAKE_N }, () => ({ x: 0, z: 0, vx: 0, vz: 0, age: 1, life: 1, size: 1, grow: 1 })),
-    [],
-  )
+  const parts = useMemo(() => Array.from({ length: WAKE_N }, () => ({ x: 0, z: 0, vx: 0, vz: 0, age: 1, life: 1, size: 1, grow: 1 })), [])
   const cursor = useRef(0)
   const acc = useRef(0)
-  const mat = useMemo(
-    () =>
-      new THREE.MeshBasicMaterial({ map: foamDot(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, color: '#ffffff', opacity: 0.85 }),
-    [],
-  )
+  const mat = useMemo(() => new THREE.MeshBasicMaterial({ map: foamDot(), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, color: '#ffffff' }), [])
   const geo = useMemo(() => new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), [])
   const tmp = useMemo(() => ({ m: new THREE.Matrix4(), q: new THREE.Quaternion(), c: new THREE.Color(), v: new THREE.Vector3(), s: new THREE.Vector3() }), [])
-
   const emit = (x: number, z: number, vx: number, vz: number, life: number, size: number, grow: number) => {
     const p = parts[cursor.current]
     cursor.current = (cursor.current + 1) % WAKE_N
     Object.assign(p, { x, z, vx, vz, age: 0, life, size, grow })
   }
-
   useFrame((_, dtRaw) => {
     const dt = Math.min(dtRaw, 0.1)
     acc.current += dt * sim.speed
@@ -488,15 +469,15 @@ export function Wakes() {
         if (s.speed < 0.6) continue
         const L = s.cls.length
         const B = s.cls.beam
-        const fx = Math.sin(s.heading)
-        const fz = Math.cos(s.heading)
-        const stern = toWorld(s, (Math.random() - 0.5) * B * 0.5, -L / 2 - 1)
-        emit(stern.x, stern.z, -fx * 0.5, -fz * 0.5, 7, B * 0.45, 1.6)
-        for (const side of [-1, 1]) {
-          const bow = toWorld(s, side * B * 0.45, L / 2 - 6)
-          const out = toWorld({ pos: { x: 0, z: 0 }, heading: s.heading }, side * 1.6, -0.6)
-          emit(bow.x, bow.z, out.x * s.speed * 0.25, out.z * s.speed * 0.25, 6, 2.2, 1.2)
-        }
+        const rev = s.path[0]?.rev
+        const stern = toWorld(s, (Math.random() - 0.5) * B * 0.5, rev ? L / 2 + 1 : -L / 2 - 1)
+        emit(stern.x, stern.z, 0, 0, 8, B * 0.45, 1.6)
+        if (!rev)
+          for (const side of [-1, 1]) {
+            const bow = toWorld(s, side * B * 0.45, L / 2 - 6)
+            const out = toWorld({ pos: { x: 0, z: 0 }, heading: s.heading }, side * 1.6, -0.6)
+            emit(bow.x, bow.z, out.x * s.speed * 0.25, out.z * s.speed * 0.25, 6, 2.2, 1.2)
+          }
       }
       for (const t of sim.tugs) {
         if (t.speed < 1) continue
