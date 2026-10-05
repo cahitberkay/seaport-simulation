@@ -181,7 +181,18 @@ function PortSwitcher() {
   )
 }
 
+/** select a ship from a list and fly the camera to it (moving ships are then followed) */
+function useFocusShip() {
+  const select = useUI((st) => st.select)
+  const cam = useUI((st) => st.cam)
+  return (s: Ship) => {
+    select({ type: 'ship', id: s.id }, !['working', 'anchored'].includes(s.state))
+    cam({ kind: 'focus', x: s.pos.x, z: s.pos.z, dist: Math.max(220, s.cls.length * 2.8) })
+  }
+}
+
 function SearchBox() {
+  const focusShip = useFocusShip()
   const select = useUI((s) => s.select)
   const [q, setQ] = useState('')
   const [open, setOpen] = useState(false)
@@ -207,7 +218,7 @@ function SearchBox() {
     const out: { key: string; label: string; sub: string; go: () => void }[] = []
     for (const s of sim.ships)
       if (`${s.name}${s.imo}${s.navy?.hull ?? ''}`.toLowerCase().replace(/[\s-]/g, '').includes(k.replace(/-/g, '')))
-        out.push({ key: s.id, label: s.name, sub: `${s.cls.label} · ${shipStatus(s).label}`, go: () => select({ type: 'ship', id: s.id }, !['working', 'anchored'].includes(s.state)) })
+        out.push({ key: s.id, label: s.name, sub: `${s.cls.label} · ${shipStatus(s).label}`, go: () => focusShip(s) })
     for (const p of [...PLACES, ...LOGISTICS]) if (p.name.toLowerCase().replace(/\s/g, '').includes(k)) out.push({ key: p.id, label: p.name, sub: 'Place', go: () => select({ type: 'place', id: p.id }) })
     for (const c of sim.cranes) if (c.id.toLowerCase().replace('-', '').includes(k.replace('-', ''))) out.push({ key: c.id, label: c.id, sub: PORT.ct.crane === 'sts' ? 'Ship-to-shore crane' : 'Mobile harbour crane', go: () => select({ type: 'crane', id: c.id }) })
     if (out.length < 8 && k.length >= 3)
@@ -413,7 +424,7 @@ function TodayCard() {
 }
 
 function VesselList() {
-  const select = useUI((s) => s.select)
+  const focusShip = useFocusShip()
   const [filter, setFilter] = useState<'all' | 'cargo' | 'cruise' | 'navy' | 'moving'>('all')
   const list = sim.ships.filter((s) =>
     filter === 'all' ? true : filter === 'cargo' ? !s.cls.navy && s.kind !== 'cruise' : filter === 'cruise' ? s.kind === 'cruise' : filter === 'navy' ? !!s.cls.navy : !['working', 'anchored'].includes(s.state),
@@ -431,7 +442,7 @@ function VesselList() {
         {list.map((s) => {
           const st = shipStatus(s)
           return (
-            <button key={s.id} className="list-row link" onClick={() => select({ type: 'ship', id: s.id }, !['working', 'anchored'].includes(s.state))}>
+            <button key={s.id} className="list-row link" onClick={() => focusShip(s)}>
               <span className={`kind-dot k-${s.cls.navy ? 'navy' : s.kind}`} />
               <span className="grow">
                 <b className="ellipsis block">{s.name}</b>
@@ -1444,7 +1455,7 @@ export function BottomDock() {
 
 const PLAN_BERTHS = Object.keys(PORT.schedule)
 function BerthPlan() {
-  const select = useUI((s) => s.select)
+  const focusShip = useFocusShip()
   const berths = BERTHS.filter((b) => PLAN_BERTHS.includes(b.id))
   const t0 = sim.time - WINDOW_BEFORE
   const span = WINDOW_BEFORE + WINDOW_AFTER
@@ -1490,7 +1501,7 @@ function BerthPlan() {
                     className={`g-bar g-${cls}`}
                     style={{ left: `${left}%`, width: `${Math.max(0.8, right - left)}%` }}
                     title={`${c.name} · ${fmtTime(eta)}–${fmtTime(etd)}`}
-                    onClick={() => s && select({ type: 'ship', id: s.id }, s.state !== 'working')}
+                    onClick={() => s && focusShip(s)}
                   >
                     {c.name.toUpperCase()}
                   </button>
@@ -1507,13 +1518,13 @@ function BerthPlan() {
 }
 
 function VesselTable() {
-  const select = useUI((s) => s.select)
+  const focusShip = useFocusShip()
   return (
     <div className="vtable">
       {sim.ships.map((s) => {
         const st = shipStatus(s)
         return (
-          <button key={s.id} className="vrow" onClick={() => select({ type: 'ship', id: s.id }, s.state !== 'working')}>
+          <button key={s.id} className="vrow" onClick={() => focusShip(s)}>
             <b className="ellipsis">{s.name}</b>
             <span className="muted">{s.cls.label}</span>
             <span className="ellipsis">
