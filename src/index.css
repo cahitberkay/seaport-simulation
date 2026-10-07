@@ -1545,6 +1545,16 @@ button {
   flex-direction: column;
   gap: 10px;
   pointer-events: none;
+  /* on short screens the cards scroll instead of spilling over the bottom dock */
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+}
+.left-col > .card {
+  flex-shrink: 0;
+}
+.left-col > .card.tall {
+  flex-shrink: 1;
 }
 .left-col > * {
   pointer-events: auto;
